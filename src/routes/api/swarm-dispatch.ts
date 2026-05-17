@@ -502,10 +502,17 @@ function markDispatchResult(workerId: string, result: WorkerResult): void {
 }
 
 function markCheckpointResult(workerId: string, checkpoint: ParsedSwarmCheckpoint, notifySessionKey?: string | null): void {
+  // When the checkpoint reaches any terminal status (anything other than
+  // 'in_progress' — i.e. done/blocked/needs_input/handoff) the worker is no
+  // longer running this task, so clear currentTask the same way conductor-stop
+  // resets it. While still in_progress we omit the key entirely so
+  // writeRuntimePatch keeps the existing currentTask untouched.
+  const clearCurrentTask = checkpoint.checkpointStatus !== 'in_progress'
   writeRuntimePatch(workerId, {
     state: checkpoint.runtimeState,
     phase: checkpoint.stateLabel.toLowerCase(),
     checkpointStatus: checkpoint.checkpointStatus,
+    ...(clearCurrentTask ? { currentTask: null } : {}),
     lastCheckIn: new Date().toISOString(),
     lastOutputAt: Date.now(),
     lastSummary: checkpoint.result,
