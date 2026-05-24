@@ -1071,6 +1071,10 @@ export function ChatScreen({
           (message) => ({
             ...message,
             status: 'sent',
+            // Clear __optimisticId so isOptimisticUserMessage returns false.
+            // Without this the message keeps being treated as pending and
+            // gets re-persisted, causing transcript duplication. Fixes #506.
+            __optimisticId: undefined,
             runId: runId ?? message.runId,
           }),
         )

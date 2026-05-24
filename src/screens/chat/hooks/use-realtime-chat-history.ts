@@ -325,6 +325,15 @@ export function useRealtimeChatHistory({
               (prevData?.messages as Array<unknown> | undefined)?.length ?? 0
 
             // Refetch immediately — done event message is already in realtime store
+            // Capture the just-completed assistant message from the realtime buffer
+            // BEFORE invalidating. After compaction the refetched history may be
+            // shorter and miss this message entirely. Fixes #505.
+            const realtimeForSession =
+              useChatStore.getState().realtimeMessages.get(effectiveSessionKey)
+            const lastRealtimeMsg = realtimeForSession?.[realtimeForSession.length - 1]
+            const completedAssistant =
+              lastRealtimeMsg?.role === 'assistant' ? lastRealtimeMsg : null
+
             queryClient.invalidateQueries({ queryKey: key }).then(() => {
               clearCompletedStreaming()
 
@@ -333,6 +342,27 @@ export function useRealtimeChatHistory({
                 queryClient.getQueryData<Record<string, unknown>>(key)
               const newCount =
                 (newData?.messages as Array<unknown> | undefined)?.length ?? 0
+
+              // Re-inject the completed assistant message if compaction dropped it
+              if (completedAssistant && newCount < prevCount) {
+                const refetchedMessages =
+                  (newData?.messages as Array<ChatMessage>) ?? []
+                const alreadyPresent = refetchedMessages.some(
+                  (m) =>
+                    m.role === 'assistant' &&
+                    textFromMessage(m).slice(-64) ===
+                      textFromMessage(completedAssistant).slice(-64),
+                )
+                if (!alreadyPresent) {
+                  appendHistoryMessage(
+                    queryClient,
+                    effectiveFriendlyId,
+                    effectiveSessionKey,
+                    completedAssistant,
+                  )
+                }
+              }
+
               if (
                 prevCount > 10 &&
                 newCount > 0 &&
