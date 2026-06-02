@@ -99,10 +99,11 @@ This installs `hermes-agent` via Nous's official installer, clones this repo, se
 
 ```bash
 hermes gateway run                  # terminal 1
-cd ~/hermes-workspace && pnpm dev   # terminal 2
+hermes dashboard                    # terminal 2
+cd ~/hermes-workspace && pnpm dev   # terminal 3
 ```
 
-Open http://localhost:3000. That's it.
+Open the URL printed by the installer or Vite. The default is http://localhost:3000, but the installer will write a different `PORT` if 3000 is already taken.
 
 ---
 
@@ -124,7 +125,7 @@ echo 'HERMES_DASHBOARD_URL=http://127.0.0.1:9119' >> .env
 # If your gateway was started with API_SERVER_KEY (auth enabled), set the same value:
 # echo 'HERMES_API_TOKEN=***' >> .env
 
-pnpm dev                            # http://localhost:3000 (override with PORT=4000 pnpm dev)
+PORT=3100 pnpm dev                  # pick any free UI port; 3000 is the default
 ```
 
 Requirements on the agent side:
@@ -383,6 +384,7 @@ HERMES_DASHBOARD_URL=http://127.0.0.1:9119
 | Gateway on a remote server (Tailscale / VPN) | Set both URLs to the reachable IP (e.g. `http://100.x.y.z:8642`) and add `API_SERVER_HOST=0.0.0.0` to the gateway's `~/.hermes/.env` |
 | Already-running `hermes-agent` from upstream installer | Just set `HERMES_API_URL` + `HERMES_DASHBOARD_URL` and skip the one-liner installer |
 | Multiple agent profiles | Profiles live under `~/.hermes/profiles/<name>` — the dashboard switches between them at runtime; workspace follows automatically |
+| Managed/profile-scoped installs | Point `HERMES_API_URL` and `HERMES_DASHBOARD_URL` at the already-running services, set `PORT` to a free UI port, and do not re-run the one-line installer against the managed Hermes home |
 
 ### Live re-pairing (no restart)
 

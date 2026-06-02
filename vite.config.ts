@@ -28,7 +28,8 @@ import viteTsConfigPaths from 'vite-tsconfig-paths'
 function resolveClaudeAgentDir(env: Record<string, string>): string | null {
   const candidates: string[] = []
 
-  const explicitAgentPath = env.HERMES_AGENT_PATH?.trim() || env.CLAUDE_AGENT_PATH?.trim()
+  const explicitAgentPath =
+    env.HERMES_AGENT_PATH?.trim() || env.CLAUDE_AGENT_PATH?.trim()
   if (explicitAgentPath) {
     candidates.push(explicitAgentPath)
   }
@@ -49,9 +50,26 @@ function resolveClaudeAgentDir(env: Record<string, string>): string | null {
 }
 
 /** Find the Hermes CLI binary used to start the local gateway. */
+function resolveCommandPath(command: string): string | null {
+  try {
+    const resolved = execSync(`command -v ${command}`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    return resolved || null
+  } catch {
+    return null
+  }
+}
+
 function resolveClaudeBinary(): string | null {
   const candidates = [
     process.env.HERMES_CLI_BIN || '',
+    resolveCommandPath('hermes') || '',
+    resolve(os.homedir(), '.hermes', 'bin', 'hermes'),
+    resolve(os.homedir(), '.local', 'bin', 'hermes'),
+    process.env.CLAUDE_CLI_BIN || '',
+    resolveCommandPath('claude') || '',
     resolve(os.homedir(), '.hermes', 'hermes-agent', 'venv', 'bin', 'hermes'),
     resolve(os.homedir(), '.claude', 'bin', 'claude'),
     resolve(os.homedir(), '.local', 'bin', 'claude'),
@@ -88,7 +106,10 @@ async function isClaudeAgentHealthy(port = 8642): Promise<boolean> {
 
 const config = defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const claudeApiUrl = env.CLAUDE_API_URL?.trim() || 'http://127.0.0.1:8642'
+  const claudeApiUrl =
+    env.HERMES_API_URL?.trim() ||
+    env.CLAUDE_API_URL?.trim() ||
+    'http://127.0.0.1:8642'
   // /api/connection-status is handled by the real route file at
   // src/routes/api/connection-status.ts; the dev server no longer
   // intercepts that path with a slim shortcut. See #285.
@@ -99,9 +120,15 @@ const config = defineConfig(({ mode, command }) => {
 
   const startClaudeAgent = async () => {
     if (claudeAgentStarted) return
-    // Skip auto-start when CLAUDE_API_URL is explicitly set to a non-local endpoint
+    // Skip auto-start when HERMES_API_URL/CLAUDE_API_URL points at an
+    // external backend.
     const explicitUrl =
-      env.CLAUDE_API_URL || process.env.CLAUDE_API_URL || claudeApiUrl || ''
+      env.HERMES_API_URL ||
+      process.env.HERMES_API_URL ||
+      env.CLAUDE_API_URL ||
+      process.env.CLAUDE_API_URL ||
+      claudeApiUrl ||
+      ''
     if (
       explicitUrl &&
       explicitUrl !== 'http://127.0.0.1:8642' &&
@@ -170,6 +197,7 @@ const config = defineConfig(({ mode, command }) => {
         ...process.env,
         PATH: [
           resolve(os.homedir(), '.claude', 'bin'),
+          resolve(os.homedir(), '.hermes', 'bin'),
           resolve(os.homedir(), '.local', 'bin'),
           agentDir ? resolve(agentDir, '.venv', 'bin') : '',
           agentDir ? resolve(agentDir, 'venv', 'bin') : '',
@@ -477,7 +505,7 @@ const config = defineConfig(({ mode, command }) => {
       //   1. --port CLI flag (wins, but we no longer hardcode it in package.json)
       //   2. $PORT env var (for containers, reverse proxies, WhatsApp bridge collisions, etc. — see #96)
       //   3. default 3000 (matches README/docs/docker-compose expectations)
-      port: process.env.PORT ? Number(process.env.PORT) : 3000,
+      port: Number(env.PORT || process.env.PORT || 3000),
       // Managed Workspace launchers expect a stable port. Fail loudly instead
       // of silently hopping to 3001+ so launchctl/service health matches the
       // actual listening socket.
@@ -703,12 +731,32 @@ const config = defineConfig(({ mode, command }) => {
           // Replace specific env vars first, then the generic fallback
           let result = code
           result = result.replace(
+            /process\.env\.HERMES_API_URL/g,
+            JSON.stringify(claudeApiUrl),
+          )
+          result = result.replace(
             /process\.env\.CLAUDE_API_URL/g,
             JSON.stringify(claudeApiUrl),
           )
           result = result.replace(
+            /process\.env\.HERMES_DASHBOARD_URL/g,
+            JSON.stringify(
+              env.HERMES_DASHBOARD_URL || env.CLAUDE_DASHBOARD_URL || '',
+            ),
+          )
+          result = result.replace(
+            /process\.env\.CLAUDE_DASHBOARD_URL/g,
+            JSON.stringify(
+              env.HERMES_DASHBOARD_URL || env.CLAUDE_DASHBOARD_URL || '',
+            ),
+          )
+          result = result.replace(
+            /process\.env\.HERMES_API_TOKEN/g,
+            JSON.stringify(env.HERMES_API_TOKEN || env.CLAUDE_API_TOKEN || ''),
+          )
+          result = result.replace(
             /process\.env\.CLAUDE_API_TOKEN/g,
-            JSON.stringify(env.CLAUDE_API_TOKEN || ''),
+            JSON.stringify(env.HERMES_API_TOKEN || env.CLAUDE_API_TOKEN || ''),
           )
           result = result.replace(
             /process\.env\.NODE_ENV/g,

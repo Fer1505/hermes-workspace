@@ -655,7 +655,7 @@ const DASHBOARD_BACKED_APIS = new Set([
 
 export function getCapabilityWarningMessage(
   next: GatewayCapabilities,
-  criticalMissing: string[],
+  criticalMissing: Array<string>,
 ): string | null {
   if (criticalMissing.length === 0 || (!next.health && !next.dashboard.available)) {
     return null
@@ -752,7 +752,8 @@ async function autoDetectGatewayUrl(): Promise<void> {
 }
 
 async function autoDetectDashboardUrl(): Promise<void> {
-  if (process.env.CLAUDE_DASHBOARD_URL) return
+  if (process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL)
+    return
 
   const candidates = ['http://127.0.0.1:9119']
   for (const candidate of candidates) {
