@@ -24,7 +24,7 @@ import {
 import { getChatMode } from '../../server/gateway-capabilities'
 import { ensureLocalSession, appendLocalMessage, getLocalMessages, touchLocalSession } from '../../server/local-session-store'
 import { getLocalProviderDef, getDiscoveredModels } from '../../server/local-provider-discovery'
-import { openaiChat } from '../../server/openai-compat-api'
+import { getBearerToken, openaiChat } from '../../server/openai-compat-api'
 import { streamResponses } from '../../server/responses-api'
 import { selectPortableConversationHistory } from '../../server/portable-history'
 import {
@@ -545,7 +545,7 @@ export const Route = createFileRoute('/api/send-stream')({
                   const effectiveHistory = selectPortableConversationHistory(
                     persistedHistory,
                     history,
-                    { localBaseUrl },
+                    { localBaseUrl, bearerToken: getBearerToken() },
                   )
                   const portableMessages: Array<OpenAICompatMessage> = [
                     ...localeSystemMsg,

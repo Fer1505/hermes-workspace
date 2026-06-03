@@ -21,6 +21,7 @@ import {
   getSession as getDashboardSession,
   getSessionMessages as getDashboardSessionMessages,
   listSessions as listDashboardSessions,
+  saveConfig as saveDashboardConfig,
   searchSessions as searchDashboardSessions,
   updateSession as updateDashboardSession,
 } from './claude-dashboard-api'
@@ -404,23 +405,23 @@ export async function streamChat(
       const os = await import('node:os')
       const dir = path.join(os.tmpdir(), 'hermes-tool-debug')
       fs.mkdirSync(dir, { recursive: true })
-      const file = path.join(
-        dir,
-        `sse-${sessionId}-${Date.now()}.log`,
-      )
+      const file = path.join(dir, `sse-${sessionId}-${Date.now()}.log`)
       toolDebugStream = fs.createWriteStream(file, { flags: 'a' })
       console.log(`[claude-api][tool-debug] writing SSE dump to ${file}`)
-      toolDebugStream.write(`# session=${sessionId} ts=${new Date().toISOString()}\n`)
+      toolDebugStream.write(
+        `# session=${sessionId} ts=${new Date().toISOString()}\n`,
+      )
     } catch (err) {
       console.warn('[claude-api][tool-debug] failed to open dump file:', err)
     }
   }
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
+  for (
+    let chunk = await reader.read();
+    !chunk.done;
+    chunk = await reader.read()
+  ) {
+    buffer += decoder.decode(chunk.value, { stream: true })
     const lines = buffer.split('\n')
     buffer = lines.pop() || ''
 
@@ -437,7 +438,9 @@ export async function streamChat(
         if (toolDebugStream) {
           // Truncate very long payloads so the dump stays human-readable.
           const trimmed =
-            dataStr.length > 4000 ? dataStr.slice(0, 4000) + '...[trunc]' : dataStr
+            dataStr.length > 4000
+              ? dataStr.slice(0, 4000) + '...[trunc]'
+              : dataStr
           toolDebugStream.write(`data: ${trimmed}\n\n`)
         }
         try {
@@ -511,16 +514,7 @@ export async function patchConfig(
   patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   if (getCapabilities().dashboard.available) {
-    const res = await dashboardFetch('/api/config', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      throw new Error(`Hermes dashboard PATCH /api/config: ${res.status} ${body}`)
-    }
-    return res.json() as Promise<Record<string, unknown>>
+    return saveDashboardConfig(patch) as Promise<Record<string, unknown>>
   }
   return claudePatch<Record<string, unknown>>('/api/config', patch)
 }

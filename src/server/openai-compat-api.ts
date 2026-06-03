@@ -18,7 +18,7 @@ import { CLAUDE_API } from './gateway-capabilities'
  * 2. `CLAUDE_API_TOKEN` env var (back-compat)
  * 3. Codex OAuth access token from `~/.codex/auth.json`
  */
-function getBearerToken(): string {
+export function getBearerToken(): string {
   const fromEnv = process.env.HERMES_API_TOKEN || process.env.CLAUDE_API_TOKEN
   if (fromEnv) return fromEnv
 
@@ -158,8 +158,7 @@ function parseClaudeToolProgressChunk(payload: string): StreamChunkType | null {
     const parsed = JSON.parse(payload) as unknown
     const record = readRecord(parsed)
     if (!record) return null
-    const name =
-      readString(record.tool) || readString(record.name) || 'tool'
+    const name = readString(record.tool) || readString(record.name) || 'tool'
     const emoji = readString(record.emoji)
     const labelText = readString(record.label)
     const label = [emoji, labelText].filter(Boolean).join(' ').trim()
@@ -202,11 +201,12 @@ export async function* parseOpenAIStream(
   const decoder = new TextDecoder()
   let buffer = ''
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
+  for (
+    let chunk = await reader.read();
+    !chunk.done;
+    chunk = await reader.read()
+  ) {
+    buffer += decoder.decode(chunk.value, { stream: true })
 
     let boundary = buffer.indexOf('\n\n')
     while (boundary >= 0) {
@@ -214,7 +214,7 @@ export async function* parseOpenAIStream(
       buffer = buffer.slice(boundary + 2)
 
       let eventName = ''
-      const dataLines: string[] = []
+      const dataLines: Array<string> = []
 
       for (const line of rawEvent.split('\n')) {
         const trimmed = line.trim()
@@ -278,25 +278,28 @@ export async function openaiChat(
   messages: Array<OpenAICompatMessage>,
   options: OpenAIChatOptions = {},
 ): Promise<string | AsyncGenerator<StreamChunkType, void, void>> {
+  const gatewayBase = CLAUDE_API.replace(/\/+$/, '')
+  const explicitBaseUrl = options.baseUrl?.replace(/\/+$/, '')
+  const endpoint = explicitBaseUrl
+    ? `${explicitBaseUrl}/chat/completions`
+    : `${gatewayBase}/v1/chat/completions`
+  const usesHermesGateway =
+    explicitBaseUrl === undefined || explicitBaseUrl === `${gatewayBase}/v1`
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const bearer = getBearerToken()
+  const bearer = usesHermesGateway ? getBearerToken() : null
   if (bearer) {
     headers['Authorization'] = `Bearer ${bearer}`
   }
-  // Session continuity is part of request routing, not authentication.
-  // If the gateway requires auth, _check_auth has already validated the
-  // bearer above; when it does not, dropping these headers forces Hermes
-  // Agent to derive a fresh api-* session from each message payload.
-  if (options.sessionId) {
+  // Hermes Agent only accepts explicit session-continuity headers when a
+  // bearer token scopes the request. Without auth, let the gateway derive a
+  // fresh api-* session from the message payload.
+  if (options.sessionId && bearer) {
     headers['X-Hermes-Session-Id'] = options.sessionId
     // Back-compat for older/Claude-compatible adapters that still look for
     // the pre-Hermes header name.  Hermes Agent ignores this alias.
     headers['X-Claude-Session-Id'] = options.sessionId
   }
 
-  const endpoint = options.baseUrl
-    ? `${options.baseUrl.replace(/\/+$/, '')}/chat/completions`
-    : `${CLAUDE_API}/v1/chat/completions`
   const response = await fetch(endpoint, {
     method: 'POST',
     headers,

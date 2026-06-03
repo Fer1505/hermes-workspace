@@ -34,7 +34,9 @@ function readOverrides(): WorkspaceOverrides {
   try {
     const raw = fs.readFileSync(overridesPath(), 'utf-8')
     const parsed = JSON.parse(raw) as unknown
-    return parsed !== null && typeof parsed === 'object' ? (parsed as WorkspaceOverrides) : {}
+    return parsed !== null && typeof parsed === 'object'
+      ? (parsed as WorkspaceOverrides)
+      : {}
   } catch {
     return {}
   }
@@ -87,7 +89,9 @@ export function setGatewayUrl(input: string | null | undefined): string {
   } else {
     delete overrides.claudeApiUrl
     CLAUDE_API = normalizeUrl(
-      process.env.HERMES_API_URL || process.env.CLAUDE_API_URL || 'http://127.0.0.1:8642',
+      process.env.HERMES_API_URL ||
+        process.env.CLAUDE_API_URL ||
+        'http://127.0.0.1:8642',
     )
   }
   writeOverrides(overrides)
@@ -109,7 +113,9 @@ export function setDashboardUrl(input: string | null | undefined): string {
   } else {
     delete overrides.claudeDashboardUrl
     CLAUDE_DASHBOARD_URL = normalizeUrl(
-      process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL || 'http://127.0.0.1:9119',
+      process.env.HERMES_DASHBOARD_URL ||
+        process.env.CLAUDE_DASHBOARD_URL ||
+        'http://127.0.0.1:9119',
     )
   }
   writeOverrides(overrides)
@@ -127,7 +133,7 @@ export function getResolvedUrls(): {
   const overrides = readOverrides()
   const source = overrides.claudeApiUrl
     ? 'override'
-    : (process.env.HERMES_API_URL || process.env.CLAUDE_API_URL)
+    : process.env.HERMES_API_URL || process.env.CLAUDE_API_URL
       ? 'env'
       : 'default'
   return { gateway: CLAUDE_API, dashboard: CLAUDE_DASHBOARD_URL, source }
@@ -150,7 +156,10 @@ const PROBE_TIMEOUT_MS = 3_000
 const PROBE_TTL_MS = 120_000
 const PROBE_TTL_DISCONNECTED_MS = 15_000
 
-function effectiveProbeTtl(caps: { health: boolean; chatCompletions: boolean }): number {
+function effectiveProbeTtl(caps: {
+  health: boolean
+  chatCompletions: boolean
+}): number {
   if (caps.health || caps.chatCompletions) return PROBE_TTL_MS
   return PROBE_TTL_DISCONNECTED_MS
 }
@@ -208,11 +217,40 @@ export type DashboardCapabilities = {
   }
 }
 
+export type AgentApiCapabilities = {
+  available: boolean
+  models: boolean
+  chatCompletions: boolean
+  chatCompletionsStreaming: boolean
+  responses: boolean
+  responsesStreaming: boolean
+  runSubmission: boolean
+  runStop: boolean
+  runApproval: boolean
+  sessionContinuityHeader: string | null
+  sessionKeyHeader: string | null
+}
+
+export const NO_AGENT_API_CAPABILITIES: AgentApiCapabilities = {
+  available: false,
+  models: false,
+  chatCompletions: false,
+  chatCompletionsStreaming: false,
+  responses: false,
+  responsesStreaming: false,
+  runSubmission: false,
+  runStop: false,
+  runApproval: false,
+  sessionContinuityHeader: null,
+  sessionKeyHeader: null,
+}
+
 /** Full capabilities — backward compat with existing code */
-export type GatewayCapabilities =
-  CoreCapabilities &
+export type GatewayCapabilities = CoreCapabilities &
   EnhancedCapabilities &
-  DashboardCapabilities
+  DashboardCapabilities & {
+    api: AgentApiCapabilities
+  }
 
 export type GatewayMode =
   | 'zero-fork'
@@ -249,6 +287,7 @@ let capabilities: GatewayCapabilities = {
     available: false,
     url: CLAUDE_DASHBOARD_URL,
   },
+  api: { ...NO_AGENT_API_CAPABILITIES },
   probed: false,
 }
 
@@ -259,7 +298,8 @@ let dashboardTokenPromise: Promise<string> | null = null
 let dashboardTokenCache = ''
 
 /** Optional bearer token for authenticated gateway endpoints. */
-export const BEARER_TOKEN = process.env.HERMES_API_TOKEN || process.env.CLAUDE_API_TOKEN || ''
+export const BEARER_TOKEN =
+  process.env.HERMES_API_TOKEN || process.env.CLAUDE_API_TOKEN || ''
 
 /**
  * Dashboard API auth uses the ephemeral session token injected into the
@@ -319,7 +359,7 @@ export async function dashboardAuthHeaders(options?: {
   force?: boolean
 }): Promise<Record<string, string>> {
   const token = await getDashboardToken(options)
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  return token ? { 'X-Hermes-Session-Token': token } : {}
 }
 
 function withDashboardBase(path: string): string {
@@ -345,7 +385,11 @@ export async function dashboardFetch(
       !requestPath.endsWith('/api/dashboard/plugins') &&
       !requestPath.endsWith('/api/dashboard/plugins/rescan')
 
-    if (isProtected && !headers.has('Authorization')) {
+    if (
+      isProtected &&
+      !headers.has('X-Hermes-Session-Token') &&
+      !headers.has('Authorization')
+    ) {
       const auth = await dashboardAuthHeaders({ force: forceToken })
       for (const [key, value] of Object.entries(auth)) {
         headers.set(key, value)
@@ -422,12 +466,15 @@ async function probe(path: string): Promise<boolean> {
  */
 async function probeEnhancedChatStream(): Promise<boolean> {
   try {
-    const res = await fetch(`${CLAUDE_API}/api/sessions/__probe__/chat/stream`, {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: '{}',
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    })
+    const res = await fetch(
+      `${CLAUDE_API}/api/sessions/__probe__/chat/stream`,
+      {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      },
+    )
     // Vanilla hermes-agent has no such endpoint — dashboard layer 404s,
     // gateway 404s, anything in between 404s. Enhanced fork accepts POST
     // and returns either a 4xx structured error (validation) or starts a
@@ -458,6 +505,59 @@ async function probeChatCompletions(): Promise<boolean> {
     return true
   } catch {
     return false
+  }
+}
+
+function getRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function boolFeature(features: Record<string, unknown>, key: string): boolean {
+  return features[key] === true
+}
+
+function stringFeature(
+  features: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = features[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+export async function probeApiCapabilities(): Promise<AgentApiCapabilities> {
+  try {
+    const res = await fetch(`${CLAUDE_API}/v1/capabilities`, {
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    if (!res.ok) return { ...NO_AGENT_API_CAPABILITIES }
+
+    const body = getRecord(await res.json().catch(() => null))
+    const features = getRecord(body.features)
+    const endpoints = getRecord(body.endpoints)
+    return {
+      available: true,
+      models: 'models' in endpoints,
+      chatCompletions: boolFeature(features, 'chat_completions'),
+      chatCompletionsStreaming: boolFeature(
+        features,
+        'chat_completions_streaming',
+      ),
+      responses: boolFeature(features, 'responses_api'),
+      responsesStreaming: boolFeature(features, 'responses_streaming'),
+      runSubmission: boolFeature(features, 'run_submission'),
+      runStop: boolFeature(features, 'run_stop'),
+      runApproval: boolFeature(features, 'run_approval_response'),
+      sessionContinuityHeader: stringFeature(
+        features,
+        'session_continuity_header',
+      ),
+      sessionKeyHeader: stringFeature(features, 'session_key_header'),
+    }
+  } catch {
+    return { ...NO_AGENT_API_CAPABILITIES }
   }
 }
 
@@ -520,7 +620,9 @@ export function isLocalhostDeployment(): boolean {
   const isLoopbackHost = (host: string): boolean => {
     const h = host.trim().toLowerCase()
     if (!h) return false
-    return h === '127.0.0.1' || h === '::1' || h === 'localhost' || h === '[::1]'
+    return (
+      h === '127.0.0.1' || h === '::1' || h === 'localhost' || h === '[::1]'
+    )
   }
   const isLoopbackUrl = (raw: string): boolean => {
     try {
@@ -626,7 +728,6 @@ async function probeKanban(dashboardAvailable: boolean): Promise<boolean> {
   }
 }
 
-
 // Vanilla hermes-agent 0.10.0 satisfies: health, chatCompletions, models, streaming,
 // sessions, skills, config, jobs. Dashboard-only endpoints (themes/plugins) and the
 // legacy enhanced-fork chat stream are optional — their absence should not emit the
@@ -657,7 +758,10 @@ export function getCapabilityWarningMessage(
   next: GatewayCapabilities,
   criticalMissing: Array<string>,
 ): string | null {
-  if (criticalMissing.length === 0 || (!next.health && !next.dashboard.available)) {
+  if (
+    criticalMissing.length === 0 ||
+    (!next.health && !next.dashboard.available)
+  ) {
     return null
   }
 
@@ -786,6 +890,7 @@ export async function probeGateway(options?: {
     await Promise.all([autoDetectGatewayUrl(), autoDetectDashboardUrl()])
 
     const [
+      api,
       health,
       chatCompletions,
       models,
@@ -796,6 +901,7 @@ export async function probeGateway(options?: {
       legacyJobs,
       dashboard,
     ] = await Promise.all([
+      probeApiCapabilities(),
       probe('/health'),
       probeChatCompletions(),
       probe('/v1/models'),
@@ -828,10 +934,10 @@ export async function probeGateway(options?: {
       (await probeMcpConfigKey())
 
     capabilities = {
-      health,
-      chatCompletions,
-      models,
-      streaming: chatCompletions,
+      health: health || api.available,
+      chatCompletions: chatCompletions || api.chatCompletions,
+      models: models || api.models,
+      streaming: chatCompletions || api.chatCompletionsStreaming,
       probed: true,
       sessions: dashboard.available || legacySessions,
       enhancedChat,
@@ -847,6 +953,7 @@ export async function probeGateway(options?: {
       conductor,
       kanban,
       dashboard,
+      api,
     }
     lastProbeAt = Date.now()
     logCapabilities(capabilities)
@@ -861,8 +968,7 @@ export async function probeGateway(options?: {
 }
 
 export async function ensureGatewayProbed(): Promise<GatewayCapabilities> {
-  const isStale =
-    Date.now() - lastProbeAt > effectiveProbeTtl(capabilities)
+  const isStale = Date.now() - lastProbeAt > effectiveProbeTtl(capabilities)
   if (!capabilities.probed || isStale) {
     return probeGateway({ force: isStale })
   }
@@ -907,6 +1013,10 @@ export function getEnhancedCapabilities(): EnhancedCapabilities {
     conductor: capabilities.conductor,
     kanban: capabilities.kanban,
   }
+}
+
+export function getAgentApiCapabilities(): AgentApiCapabilities {
+  return capabilities.api
 }
 
 export function getGatewayMode(): GatewayMode {

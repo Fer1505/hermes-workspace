@@ -49,7 +49,7 @@ afterEach(() => {
 
 async function loadHandlers(modulePath: string) {
   const mod = await import(modulePath)
-  return (mod as any).Route.server.handlers
+  return mod.Route.server.handlers
 }
 
 describe('canonical /api/hermes-config route', () => {
@@ -144,12 +144,21 @@ describe('canonical /api/hermes-config route', () => {
       }),
     })
     expect(res.status).toBe(503)
-    vi.doUnmock('../../server/gateway-capabilities')
+    vi.doMock('../../server/gateway-capabilities', () => ({
+      ensureGatewayProbed: vi.fn(),
+      getCapabilities: () => ({ config: true }),
+    }))
+    vi.resetModules()
   })
 })
 
 describe('legacy /api/claude-config alias', () => {
   it('GET aliases provider.maskedCredentials to provider.maskedKeys for the legacy /settings page', async () => {
+    fs.writeFileSync(
+      path.join(tmpHome, 'config.yaml'),
+      'provider: openrouter\nmodel: auto\n',
+      'utf-8',
+    )
     fs.writeFileSync(
       path.join(tmpHome, '.env'),
       'OPENROUTER_API_KEY=sk-test-1234\n',

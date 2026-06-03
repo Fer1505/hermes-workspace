@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -27,7 +28,13 @@ let homeDir: string
 let originalHermesHome: string | undefined
 
 function writeSourcesFile(payload: unknown): void {
-  const path = join(homeDir, 'mcp-hub-sources.json')
+  const path = hubSourcesFilePath()
+  const dir = join(homeDir, 'workspace')
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch {
+    // ignore setup failures; writeFileSync will surface the real error
+  }
   writeFileSync(path, typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2))
 }
 
@@ -86,12 +93,13 @@ describe('readHubSources', () => {
 
   it('returns source=invalid for malformed JSON, preserves file', async () => {
     writeSourcesFile('not-json{{{{')
-    const before = readFileSync(join(homeDir, 'mcp-hub-sources.json'), 'utf8')
+    const path = hubSourcesFilePath()
+    const before = readFileSync(path, 'utf8')
     const result = await readHubSources()
     expect(result.source).toBe('invalid')
     expect(result.error).toBeTruthy()
     // File is preserved
-    const after = readFileSync(join(homeDir, 'mcp-hub-sources.json'), 'utf8')
+    const after = readFileSync(path, 'utf8')
     expect(after).toBe(before)
   })
 

@@ -1,7 +1,4 @@
-import {
-  dashboardFetch,
-  CLAUDE_DASHBOARD_URL,
-} from './gateway-capabilities'
+import { CLAUDE_DASHBOARD_URL, dashboardFetch } from './gateway-capabilities'
 
 export type DashboardSession = {
   id: string
@@ -67,7 +64,7 @@ export type EnvVarInfo = {
   url?: string | null
   category?: string
   is_password?: boolean
-  tools?: string[]
+  tools?: Array<string>
   advanced?: boolean
 }
 
@@ -91,7 +88,7 @@ export type ToolsetInfo = {
   description: string
   enabled: boolean
   configured: boolean
-  tools: string[]
+  tools: Array<string>
 }
 
 export type DashboardStatus = {
@@ -115,15 +112,16 @@ async function dashboardJson<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export async function listSessions(limit = 50, offset = 0): Promise<{
-  sessions: DashboardSession[]
+export async function listSessions(
+  limit = 50,
+  offset = 0,
+): Promise<{
+  sessions: Array<DashboardSession>
   total: number
   limit: number
   offset: number
 }> {
-  return dashboardJson(
-    `/api/sessions?limit=${limit}&offset=${offset}`,
-  )
+  return dashboardJson(`/api/sessions?limit=${limit}&offset=${offset}`)
 }
 
 export async function getSession(id: string): Promise<DashboardSession> {
@@ -131,14 +129,16 @@ export async function getSession(id: string): Promise<DashboardSession> {
 }
 
 export async function getSessionMessages(id: string): Promise<{
-  messages: DashboardMessage[]
+  messages: Array<DashboardMessage>
   session_started?: number
   model?: string
 }> {
   return dashboardJson(`/api/sessions/${encodeURIComponent(id)}/messages`)
 }
 
-export async function searchSessions(q: string): Promise<SessionSearchResponse> {
+export async function searchSessions(
+  q: string,
+): Promise<SessionSearchResponse> {
   return dashboardJson(`/api/sessions/search?q=${encodeURIComponent(q)}`)
 }
 
@@ -148,36 +148,32 @@ export async function deleteSession(id: string): Promise<{ ok: boolean }> {
   })
 }
 
-export async function createSession(
-  body: Record<string, unknown>,
-): Promise<{ session: DashboardSession }> {
-  return dashboardJson('/api/sessions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+function unsupportedDashboardSessionMutation(action: string): Error {
+  return new Error(
+    `capability_unavailable: Hermes Agent dashboard does not support dashboard session ${action}`,
+  )
 }
 
-export async function updateSession(
-  id: string,
-  body: Record<string, unknown>,
+export function createSession(
+  _body: Record<string, unknown>,
 ): Promise<{ session: DashboardSession }> {
-  return dashboardJson(`/api/sessions/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+  return Promise.reject(unsupportedDashboardSessionMutation('create'))
 }
 
-export async function forkSession(
-  id: string,
+export function updateSession(
+  _id: string,
+  _body: Record<string, unknown>,
+): Promise<{ session: DashboardSession }> {
+  return Promise.reject(unsupportedDashboardSessionMutation('update'))
+}
+
+export function forkSession(
+  _id: string,
 ): Promise<{ session: DashboardSession; forked_from: string }> {
-  return dashboardJson(`/api/sessions/${encodeURIComponent(id)}/fork`, {
-    method: 'POST',
-  })
+  return Promise.reject(unsupportedDashboardSessionMutation('fork'))
 }
 
-export async function getSkills(): Promise<SkillInfo[]> {
+export async function getSkills(): Promise<Array<SkillInfo>> {
   return dashboardJson('/api/skills')
 }
 
@@ -198,7 +194,7 @@ export async function getConfig(): Promise<Record<string, unknown>> {
 
 export async function getConfigSchema(): Promise<{
   fields: Record<string, unknown>
-  category_order: string[]
+  category_order: Array<string>
 }> {
   return dashboardJson('/api/config/schema')
 }
@@ -259,15 +255,13 @@ export async function saveConfig(
     // Dashboards have historically wrapped the config in `{ config: {...} }`.
     // Support both shapes defensively.
     const base =
-      current && typeof current === 'object' && 'config' in current
-        ? ((current as Record<string, unknown>).config as Record<
-            string,
-            unknown
-          >)
-        : (current as Record<string, unknown>)
-    if (base && typeof base === 'object') {
-      merged = deepMerge(base, config)
-    }
+      'config' in current &&
+      current.config !== null &&
+      typeof current.config === 'object' &&
+      !Array.isArray(current.config)
+        ? (current.config as Record<string, unknown>)
+        : current
+    merged = deepMerge(base, config)
   } catch {
     // If we can't read the current config, fall back to sending the raw patch.
     // The dashboard will reject or overwrite — this is no worse than the old
@@ -313,7 +307,7 @@ export async function deleteEnvVar(key: string): Promise<{ ok: boolean }> {
   })
 }
 
-export async function getCronJobs(): Promise<CronJob[]> {
+export async function getCronJobs(): Promise<Array<CronJob>> {
   return dashboardJson('/api/cron/jobs')
 }
 
@@ -362,7 +356,7 @@ export async function getModelInfo(): Promise<Record<string, unknown>> {
   return dashboardJson('/api/model/info')
 }
 
-export async function getToolsets(): Promise<ToolsetInfo[]> {
+export async function getToolsets(): Promise<Array<ToolsetInfo>> {
   return dashboardJson('/api/tools/toolsets')
 }
 

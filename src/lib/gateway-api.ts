@@ -140,7 +140,7 @@ export type SessionHistoryMessage = {
 
 export type SessionHistoryResponse = {
   ok?: boolean
-  messages?: SessionHistoryMessage[]
+  messages?: Array<SessionHistoryMessage>
   error?: string
 }
 
@@ -154,13 +154,18 @@ export async function fetchSessionHistory(
     const params = new URLSearchParams({ key: sessionKey })
     if (opts?.limit) params.set('limit', String(opts.limit))
     if (opts?.includeTools) params.set('includeTools', 'true')
-    const response = await fetch(makeEndpoint(`/api/session-history?${params}`), {
-      signal: controller.signal,
-    })
-    if (!response.ok) return { ok: false, messages: [], error: await readError(response) }
+    const response = await fetch(
+      makeEndpoint(`/api/session-history?${params}`),
+      {
+        signal: controller.signal,
+      },
+    )
+    if (!response.ok)
+      return { ok: false, messages: [], error: await readError(response) }
     return (await response.json()) as SessionHistoryResponse
   } catch (error) {
-    if (isAbortError(error)) return { ok: false, messages: [], error: 'Request timed out' }
+    if (isAbortError(error))
+      return { ok: false, messages: [], error: 'Request timed out' }
     return { ok: false, messages: [], error: String(error) }
   } finally {
     globalThis.clearTimeout(timeout)
@@ -185,7 +190,9 @@ export async function sendToSession(
       body: JSON.stringify({ sessionKey, message }),
       signal: controller.signal,
     })
-    const payload = (await response.json().catch(() => ({}))) as SendToSessionResponse
+    const payload = (await response
+      .json()
+      .catch(() => ({}))) as SendToSessionResponse
     if (!response.ok || payload.ok === false) {
       throw new Error(
         typeof payload.error === 'string' && payload.error.trim()
@@ -213,17 +220,16 @@ export async function fetchSessions(): Promise<GatewaySessionsResponse> {
 export async function fetchSessionStatus(
   key: string,
 ): Promise<GatewaySessionStatusResponse> {
-  const response = await fetch(makeEndpoint(`/api/session-status?key=${encodeURIComponent(key)}`))
+  const response = await fetch(
+    makeEndpoint(`/api/session-status?key=${encodeURIComponent(key)}`),
+  )
   if (!response.ok) {
     throw new Error(await readError(response))
   }
 
   const payload = (await response.json()) as Record<string, unknown>
   const normalized =
-    payload &&
-    typeof payload === 'object' &&
-    payload.payload &&
-    typeof payload.payload === 'object'
+    payload.payload && typeof payload.payload === 'object'
       ? payload.payload
       : payload
 
@@ -313,8 +319,7 @@ export async function setDefaultModel(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        raw: JSON.stringify({ defaultModel: model }, null, 2),
-        reason: 'Studio: set default model',
+        config: { defaultModel: model },
       }),
       signal: controller.signal,
     })
@@ -342,79 +347,29 @@ export async function setDefaultModel(
   }
 }
 
-export async function steerAgent(
-  sessionKey: string,
-  message: string,
+export function steerAgent(
+  _sessionKey: string,
+  _message: string,
 ): Promise<GatewayAgentActionResponse> {
-  const controller = new AbortController()
-  const timeout = globalThis.setTimeout(() => controller.abort(), 12000)
-
-  try {
-    const response = await fetch(makeEndpoint('/api/agent-steer'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionKey, message }),
-      signal: controller.signal,
-    })
-
-    const payload = (await response
-      .json()
-      .catch(() => ({}))) as GatewayAgentActionResponse
-
-    if (!response.ok || payload.ok === false) {
-      const message =
-        typeof payload.error === 'string' && payload.error.trim().length > 0
-          ? payload.error
-          : response.statusText || 'Failed to send directive'
-      throw new Error(message)
-    }
-
-    return payload
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw new Error('Request timed out')
-    }
-    throw error
-  } finally {
-    globalThis.clearTimeout(timeout)
-  }
+  return Promise.reject(
+    new Error(
+      'capability_unavailable: Hermes Agent exposes run-scoped controls only; arbitrary session steer is not available.',
+    ),
+  )
 }
 
-export async function killAgentSession(
-  sessionKey: string,
+export function killAgentSession(
+  _sessionKey: string,
 ): Promise<GatewayAgentActionResponse> {
-  const controller = new AbortController()
-  const timeout = globalThis.setTimeout(() => controller.abort(), 12000)
+  return Promise.reject(
+    new Error(
+      'capability_unavailable: Hermes Agent exposes run-scoped stop controls only; arbitrary session kill is not available.',
+    ),
+  )
+}
 
-  try {
-    const response = await fetch(makeEndpoint('/api/agent-kill'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionKey }),
-      signal: controller.signal,
-    })
-
-    const payload = (await response
-      .json()
-      .catch(() => ({}))) as GatewayAgentActionResponse
-
-    if (!response.ok || payload.ok === false) {
-      const message =
-        typeof payload.error === 'string' && payload.error.trim().length > 0
-          ? payload.error
-          : response.statusText || 'Failed to terminate agent'
-      throw new Error(message)
-    }
-
-    return payload
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw new Error('Request timed out')
-    }
-    throw error
-  } finally {
-    globalThis.clearTimeout(timeout)
-  }
+export function supportsArbitrarySessionControls(): boolean {
+  return false
 }
 
 // ── Gateway Approvals ─────────────────────────────────────────────────────────
@@ -433,80 +388,28 @@ export type GatewayApprovalEntry = {
 
 export type GatewayApprovalsResponse = {
   ok?: boolean
-  approvals?: GatewayApprovalEntry[]
-  pending?: GatewayApprovalEntry[]
+  approvals?: Array<GatewayApprovalEntry>
+  pending?: Array<GatewayApprovalEntry>
 }
 
-export async function fetchGatewayApprovals(): Promise<GatewayApprovalsResponse> {
-  const controller = new AbortController()
-  const timeout = globalThis.setTimeout(() => controller.abort(), 6000)
-  try {
-    const response = await fetch(makeEndpoint('/api/gateway/approvals'), {
-      signal: controller.signal,
-    })
-    if (!response.ok) return { ok: false, approvals: [] }
-    return (await response.json()) as GatewayApprovalsResponse
-  } catch {
-    return { ok: false, approvals: [] }
-  } finally {
-    globalThis.clearTimeout(timeout)
-  }
+export function fetchGatewayApprovals(): Promise<GatewayApprovalsResponse> {
+  return Promise.resolve({ ok: false, approvals: [], pending: [] })
 }
 
-export async function resolveGatewayApproval(
-  approvalId: string,
-  action: 'approve' | 'deny',
+export function resolveGatewayApproval(
+  _approvalId: string,
+  _action: 'approve' | 'deny',
 ): Promise<{ ok: boolean }> {
-  const controller = new AbortController()
-  const timeout = globalThis.setTimeout(() => controller.abort(), 8000)
-  try {
-    const response = await fetch(makeEndpoint(`/api/gateway/approvals/${approvalId}/${action}`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal: controller.signal,
-    })
-    return { ok: response.ok }
-  } catch {
-    return { ok: false }
-  } finally {
-    globalThis.clearTimeout(timeout)
-  }
+  return Promise.resolve({ ok: false })
 }
 
-export async function toggleAgentPause(
-  sessionKey: string,
-  pause: boolean,
+export function toggleAgentPause(
+  _sessionKey: string,
+  _pause: boolean,
 ): Promise<GatewayAgentPauseResponse> {
-  const controller = new AbortController()
-  const timeout = globalThis.setTimeout(() => controller.abort(), 12000)
-
-  try {
-    const response = await fetch(makeEndpoint('/api/agent-pause'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionKey, pause }),
-      signal: controller.signal,
-    })
-
-    const payload = (await response
-      .json()
-      .catch(() => ({}))) as GatewayAgentPauseResponse
-
-    if (!response.ok || payload.ok === false) {
-      const message =
-        typeof payload.error === 'string' && payload.error.trim().length > 0
-          ? payload.error
-          : response.statusText || 'Failed to update pause state'
-      throw new Error(message)
-    }
-
-    return payload
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw new Error('Request timed out')
-    }
-    throw error
-  } finally {
-    globalThis.clearTimeout(timeout)
-  }
+  return Promise.reject(
+    new Error(
+      'capability_unavailable: Hermes Agent does not expose arbitrary session pause/resume controls.',
+    ),
+  )
 }

@@ -39,6 +39,7 @@ function resolveClaudeAgentDir(env: Record<string, string>): string | null {
   candidates.push(
     resolve(workspaceRoot, 'hermes-agent'), // sibling (old README)
     resolve(workspaceRoot, '..', 'hermes-agent'), // one level up
+    resolve(os.homedir(), '.hermes', 'hermes-agent'), // Nous installer default
     resolve(os.homedir(), '.claude', 'hermes-agent'), // Nous installer default
     resolve(os.homedir(), 'hermes-agent'), // ~/hermes-agent
   )
@@ -78,6 +79,39 @@ function resolveClaudeBinary(): string | null {
     if (existsSync(c)) return c
   }
   return null
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const trimmed = value?.trim()
+    if (trimmed) return trimmed
+  }
+  return ''
+}
+
+function isEnabled(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes'
+}
+
+function resolveGatewayBindHost(env: Record<string, string>): string {
+  return (
+    firstNonEmpty(
+      env.API_SERVER_HOST,
+      process.env.API_SERVER_HOST,
+      env.HERMES_GATEWAY_BIND_HOST,
+      process.env.HERMES_GATEWAY_BIND_HOST,
+    ) || '127.0.0.1'
+  )
+}
+
+function parseAllowedHosts(value: string | undefined): string[] {
+  return value?.trim()
+    ? value
+        .split(',')
+        .map((host) => host.trim())
+        .filter(Boolean)
+    : []
 }
 
 /** Resolve the Python executable to use for Hermes backend startup.
@@ -148,6 +182,7 @@ const config = defineConfig(({ mode, command }) => {
 
     const claudeBin = resolveClaudeBinary()
     const agentDir = resolveClaudeAgentDir(env)
+    const gatewayBindHost = resolveGatewayBindHost(env)
 
     // Prefer the `hermes gateway run` binary path (Nous installer's canonical
     // entrypoint). Fall back to launching uvicorn against the source tree if
@@ -171,7 +206,7 @@ const config = defineConfig(({ mode, command }) => {
             'uvicorn',
             'webapi.app:app',
             '--host',
-            '0.0.0.0',
+            gatewayBindHost,
             '--port',
             '8642',
           ]
@@ -195,6 +230,7 @@ const config = defineConfig(({ mode, command }) => {
       stdio: 'pipe',
       env: {
         ...process.env,
+        API_SERVER_HOST: gatewayBindHost,
         PATH: [
           resolve(os.homedir(), '.claude', 'bin'),
           resolve(os.homedir(), '.hermes', 'bin'),
@@ -431,14 +467,33 @@ const config = defineConfig(({ mode, command }) => {
     }
   }
 
-  // Allow access from Tailscale, LAN, or custom domains via env var
-  // e.g. CLAUDE_ALLOWED_HOSTS=my-server.tail1234.ts.net,192.168.1.50
-  const _allowedHosts: string[] | true = env.CLAUDE_ALLOWED_HOSTS?.trim()
-    ? env
-        .CLAUDE_ALLOWED_HOSTS!.split(',')
-        .map((h) => h.trim())
-        .filter(Boolean)
-    : ['.ts.net'] // allow all Tailscale hostnames by default
+  const devServerHost =
+    firstNonEmpty(
+      env.HERMES_DEV_SERVER_HOST,
+      process.env.HERMES_DEV_SERVER_HOST,
+      env.HOST,
+      process.env.HOST,
+    ) || '127.0.0.1'
+  const allowAnyDevHost = isEnabled(
+    env.HERMES_DEV_ALLOW_ANY_HOST || process.env.HERMES_DEV_ALLOW_ANY_HOST,
+  )
+  // Default to Vite's safe host checks. Remote/Tailscale/LAN dev access must
+  // opt in with HERMES_ALLOWED_HOSTS/CLAUDE_ALLOWED_HOSTS, or the explicit
+  // HERMES_DEV_ALLOW_ANY_HOST=1 escape hatch for trusted throwaway sessions.
+  const allowedHostsValue = firstNonEmpty(
+    env.HERMES_ALLOWED_HOSTS,
+    process.env.HERMES_ALLOWED_HOSTS,
+    env.CLAUDE_ALLOWED_HOSTS,
+    process.env.CLAUDE_ALLOWED_HOSTS,
+  )
+  const allowedHosts: string[] | true = allowAnyDevHost
+    ? true
+    : parseAllowedHosts(allowedHostsValue)
+  if (allowAnyDevHost) {
+    console.warn(
+      '[workspace] HERMES_DEV_ALLOW_ANY_HOST=1 disables Vite host checks. Use only on trusted networks.',
+    )
+  }
   let proxyTarget = 'http://127.0.0.1:18789'
 
   try {
@@ -456,6 +511,7 @@ const config = defineConfig(({ mode, command }) => {
         '**/node_modules/**',
         '**/dist/**',
         '**/skills-bundle/**',
+        '**/e2e/**',
         '**/.{idea,git,cache,output,temp}/**',
       ],
       // Force vitest to run React through its own transform pipeline so ESM
@@ -499,8 +555,9 @@ const config = defineConfig(({ mode, command }) => {
       ],
     },
     server: {
-      // Force IPv4 — 'localhost' resolves to ::1 (IPv6) on Windows, breaking connectivity
-      host: '0.0.0.0',
+      // Loopback by default. Remote/LAN/Tailscale dev serving is an explicit
+      // opt-in via HOST or HERMES_DEV_SERVER_HOST.
+      host: devServerHost,
       // Port precedence:
       //   1. --port CLI flag (wins, but we no longer hardcode it in package.json)
       //   2. $PORT env var (for containers, reverse proxies, WhatsApp bridge collisions, etc. — see #96)
@@ -510,7 +567,7 @@ const config = defineConfig(({ mode, command }) => {
       // of silently hopping to 3001+ so launchctl/service health matches the
       // actual listening socket.
       strictPort: true,
-      allowedHosts: true,
+      allowedHosts,
       watch: {
         ignored: [
           // NOTE: the generated TanStack route tree must NOT be added to this
