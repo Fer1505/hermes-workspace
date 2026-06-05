@@ -33,6 +33,12 @@ type AvailableModel = {
   name?: string
 }
 
+type ConductorProfileSummary = {
+  name: string
+  model?: string
+  description?: string
+}
+
 type FileBrowserEntry = {
   name: string
   path: string
@@ -96,7 +102,18 @@ const QUICK_ACTIONS: Array<{
   },
 ]
 
-const AGENT_NAMES = ['Nova', 'Pixel', 'Blaze', 'Echo', 'Sage', 'Drift', 'Flux', 'Volt']
+const OLYMPUS_AGENT_NAMES = [
+  'Athena',
+  'Atlas',
+  'Hephaestus',
+  'Hestia',
+  'Mercury',
+  'Olympus Hermes',
+  'Plutus',
+  'Prometheus',
+  'Themis',
+]
+const AGENT_NAMES = OLYMPUS_AGENT_NAMES
 const AGENT_EMOJIS = ['🤖', '⚡', '🔥', '🌊', '🌿', '💫', '🔮', '⭐']
 const BLENDED_COST_PER_MILLION_TOKENS = 5
 const CONDUCTOR_GOAL_DRAFT_STORAGE_KEY = 'conductor:goal-draft'
@@ -126,6 +143,23 @@ function getAgentPersona(index: number) {
     name: AGENT_NAMES[index % AGENT_NAMES.length],
     emoji: AGENT_EMOJIS[index % AGENT_EMOJIS.length],
   }
+}
+
+function titleCaseProfileName(profileName: string): string {
+  return profileName
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+async function fetchConductorProfiles(): Promise<Array<ConductorProfileSummary>> {
+  const response = await fetch('/api/profiles/list')
+  if (!response.ok) throw new Error(`Failed to load profiles: ${response.status}`)
+  const payload = (await response.json()) as {
+    profiles?: Array<ConductorProfileSummary>
+  }
+  return (payload.profiles ?? []).filter((profile) => profile.name !== 'default')
 }
 
 function estimateTokenCost(totalTokens: number): number {
@@ -743,6 +777,12 @@ export function Conductor() {
     staleTime: 60_000,
   })
   const availableModels = modelsQuery.data ?? []
+  const profilesQuery = useQuery({
+    queryKey: ['conductor', 'profiles'],
+    queryFn: fetchConductorProfiles,
+    staleTime: 5 * 60_000,
+  })
+  const conductorProfiles = profilesQuery.data ?? []
 
   useEffect(() => {
     if (!directoryBrowserOpen) return
@@ -927,38 +967,48 @@ export function Conductor() {
       })),
     [selectedHistoryEntry],
   )
-  const OFFICE_NAMES = ['Nova', 'Pixel', 'Blaze', 'Echo', 'Sage', 'Drift']
+  const officeProfiles = useMemo(
+    () =>
+      conductorProfiles.length > 0
+        ? conductorProfiles.map((profile) => ({
+            id: profile.name,
+            name: titleCaseProfileName(profile.name),
+            model: profile.model || 'auto',
+            description: profile.description || 'Olympus agent',
+          }))
+        : OLYMPUS_AGENT_NAMES.map((name) => ({
+            id: name.toLowerCase().replace(/\s+/g, '-'),
+            name,
+            model: 'auto',
+            description: 'Olympus agent',
+          })),
+    [conductorProfiles],
+  )
   const homeOfficeRows = useMemo<AgentWorkingRow[]>(() => {
     const sessions = conductor.recentSessions
-    if (sessions.length === 0) {
-      return OFFICE_NAMES.slice(0, 3).map((name, i) => ({
-        id: `placeholder-${i}`,
-        name,
-        modelId: 'auto',
-        status: 'idle' as const,
-        lastLine: 'Waiting for work…',
-        taskCount: 0,
-        roleDescription: 'Worker',
-      }))
-    }
-    return sessions.slice(0, 6).map((session, i) => {
-      const s = session as GatewaySession
-      const updatedAt = typeof s.updatedAt === 'string' ? new Date(s.updatedAt).getTime() : typeof s.updatedAt === 'number' ? s.updatedAt : 0
-      const statusText = `${s.status ?? ''} ${s.kind ?? ''}`.toLowerCase()
-      const status = /error|failed/.test(statusText) ? ('error' as const) : /pause/.test(statusText) ? ('paused' as const) : Date.now() - updatedAt < 120_000 ? ('active' as const) : ('idle' as const)
+    return officeProfiles.map((profile) => {
+      const profileName = profile.name.toLowerCase()
+      const profileId = profile.id.toLowerCase()
+      const s = sessions.find((session) => {
+        const label = `${session.label ?? ''} ${session.title ?? ''} ${session.derivedTitle ?? ''} ${session.key ?? ''}`.toLowerCase()
+        return label.includes(profileId) || label.includes(profileName)
+      }) as GatewaySession | undefined
+      const updatedAt = typeof s?.updatedAt === 'string' ? new Date(s.updatedAt).getTime() : typeof s?.updatedAt === 'number' ? s.updatedAt : 0
+      const statusText = `${s?.status ?? ''} ${s?.kind ?? ''}`.toLowerCase()
+      const status = !s ? ('idle' as const) : /error|failed/.test(statusText) ? ('error' as const) : /pause/.test(statusText) ? ('paused' as const) : Date.now() - updatedAt < 120_000 ? ('active' as const) : ('idle' as const)
       return {
-        id: s.key ?? `session-${i}`,
-        name: OFFICE_NAMES[i % OFFICE_NAMES.length],
-        modelId: s.model ?? 'auto',
+        id: profile.id,
+        name: profile.name,
+        modelId: s?.model ?? profile.model,
         status,
-        lastLine: s.task ?? s.label ?? s.title ?? s.derivedTitle ?? 'Working…',
+        lastLine: s?.task ?? s?.label ?? s?.title ?? s?.derivedTitle ?? profile.description,
         lastAt: updatedAt || undefined,
         taskCount: 0,
-        roleDescription: s.label ?? 'Worker',
-        sessionKey: s.key ?? undefined,
+        roleDescription: profile.description,
+        sessionKey: s?.key ?? undefined,
       }
     })
-  }, [conductor.recentSessions])
+  }, [conductor.recentSessions, officeProfiles])
 
   const officeAgentRows = useMemo<AgentWorkingRow[]>(() => {
     if (conductor.workers.length > 0) {
@@ -970,7 +1020,7 @@ export function Conductor() {
 
         return {
           id: worker.key,
-          name: persona.name,
+          name: titleCaseProfileName(worker.displayName || worker.label || persona.name),
           modelId: worker.model || 'auto',
           roleDescription: worker.displayName,
           status: isWorkerPaused ? 'paused' : worker.status === 'complete' ? 'idle' : worker.status === 'stale' ? 'error' : 'active',
@@ -986,9 +1036,9 @@ export function Conductor() {
     return [
       {
         id: 'conductor-placeholder-agent',
-        name: 'Nova',
+        name: officeProfiles[0]?.name ?? OLYMPUS_AGENT_NAMES[0],
         modelId: conductor.conductorSettings.workerModel || 'auto',
-        roleDescription: 'Waiting for workers',
+        roleDescription: officeProfiles[0]?.description ?? 'Waiting for workers',
         status: 'spawning',
         lastLine: conductor.goal || 'Preparing the office…',
         taskCount: 0,
@@ -996,7 +1046,7 @@ export function Conductor() {
         sessionKey: 'conductor-placeholder-agent',
       },
     ]
-  }, [conductor.conductorSettings.workerModel, conductor.goal, conductor.isPaused, conductor.tasks, conductor.workerOutputs, conductor.workers])
+  }, [conductor.conductorSettings.workerModel, conductor.goal, conductor.isPaused, conductor.tasks, conductor.workerOutputs, conductor.workers, officeProfiles])
 
   const completePhaseProjectPath = useMemo(() => {
     const workerOutputTexts = [...Object.values(conductor.workerOutputs), ...conductor.workers.map((worker) => getLastAssistantMessage(worker.raw.messages as HistoryMessage[] | undefined))].filter(
@@ -2266,28 +2316,26 @@ export function Conductor() {
               >
                 <span>■</span> Stop Mission
               </button>
-              <button
-                type="button"
-                disabled={!conductor.orchestratorSessionKey || conductor.isPausing}
-                onClick={async () => {
-                  if (!conductor.orchestratorSessionKey) return
-                  try {
+              {conductor.canPauseMission ? (
+                <button
+                  type="button"
+                  disabled={!conductor.orchestratorSessionKey || conductor.isPausing}
+                  onClick={async () => {
+                    if (!conductor.orchestratorSessionKey) return
                     await conductor.pauseAgent(conductor.orchestratorSessionKey, !conductor.isPaused)
-                  } catch {
-                    // best effort
-                  }
-                }}
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                  !conductor.orchestratorSessionKey || conductor.isPausing
-                    ? 'cursor-not-allowed border-[var(--theme-border)] bg-[var(--theme-card2)] text-[var(--theme-muted)] opacity-50'
-                    : conductor.isPaused
-                      ? 'border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] text-[var(--theme-accent-strong)] hover:bg-[var(--theme-accent-soft-strong)]'
-                      : 'border-[var(--theme-border)] bg-[var(--theme-card2)] text-[var(--theme-muted)] hover:border-[var(--theme-accent)] hover:text-[var(--theme-text)]',
-                )}
-              >
-                <span>{conductor.isPaused ? '▶' : '⏸'}</span> {conductor.isPausing ? '...' : conductor.isPaused ? 'Resume' : 'Pause'}
-              </button>
+                  }}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                    !conductor.orchestratorSessionKey || conductor.isPausing
+                      ? 'cursor-not-allowed border-[var(--theme-border)] bg-[var(--theme-card2)] text-[var(--theme-muted)] opacity-50'
+                      : conductor.isPaused
+                        ? 'border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] text-[var(--theme-accent-strong)] hover:bg-[var(--theme-accent-soft-strong)]'
+                        : 'border-[var(--theme-border)] bg-[var(--theme-card2)] text-[var(--theme-muted)] hover:border-[var(--theme-accent)] hover:text-[var(--theme-text)]',
+                  )}
+                >
+                  <span>{conductor.isPaused ? '▶' : '⏸'}</span> {conductor.isPausing ? '...' : conductor.isPaused ? 'Resume' : 'Pause'}
+                </button>
+              ) : null}
             </div>
           </section>
           {conductor.timeoutWarning && (

@@ -13,8 +13,12 @@
  * backend so reads and writes are always consistent.
  */
 
+import { fetchJobs } from './jobs-api'
+import type { ClaudeJob } from './jobs-api'
+
 const HERMES_BASE = '/api/hermes-tasks'
 const CLAUDE_BASE = '/api/claude-tasks'
+const ASSIGNEES_BASE = '/api/claude-tasks-assignees'
 
 export type TasksBackend = 'hermes' | 'claude'
 
@@ -22,7 +26,6 @@ export type TasksBackend = 'hermes' | 'claude'
 
 type BackendResolution = {
   base: string
-  assigneesBase: string
   backend: TasksBackend
 }
 
@@ -60,7 +63,6 @@ async function resolveBackend(): Promise<BackendResolution> {
     const useHermes = hermesCount > 0 && hermesCount >= claudeCount
     _resolved = {
       base: useHermes ? HERMES_BASE : CLAUDE_BASE,
-      assigneesBase: useHermes ? '/api/hermes-tasks-assignees' : '/api/claude-tasks-assignees',
       backend: useHermes ? 'hermes' : 'claude',
     }
     return _resolved
@@ -99,6 +101,8 @@ export type ClaudeTask = {
   created_at: string
   updated_at: string
   session_id?: string | null
+  readonly?: boolean
+  source?: 'kanban' | 'job'
 }
 
 export type CreateTaskInput = {
@@ -128,8 +132,8 @@ export type AssigneesResponse = {
 // --- API functions -------------------------------------------------------
 
 export async function fetchAssignees(): Promise<AssigneesResponse> {
-  const { assigneesBase } = await resolveBackend()
-  const res = await fetch(assigneesBase)
+  await resolveBackend()
+  const res = await fetch(ASSIGNEES_BASE)
   if (!res.ok) return { assignees: [], humanReviewer: null }
   return res.json()
 }
@@ -150,7 +154,129 @@ export async function fetchTasks(params?: {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`Failed to fetch tasks: ${res.status}`)
   const data = await res.json()
-  return data.tasks ?? []
+  const tasks = Array.isArray(data.tasks) ? data.tasks as Array<ClaudeTask> : []
+  if (tasks.length > 0) return tasks
+  return fetchScheduledJobTasks(params)
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readStringCandidate(...values: Array<unknown>): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+function normalizeJobProfile(job: ClaudeJob): string | null {
+  const runtimePackCron = readRecord((job as Record<string, unknown>).hermes_runtime_pack_cron)
+  return readStringCandidate(
+    job.profile,
+    job.profile_name,
+    runtimePackCron.profile,
+    runtimePackCron.runtime_pack_id,
+  )
+}
+
+function mapJobToColumn(job: ClaudeJob): TaskColumn {
+  const state = typeof job.state === 'string' ? job.state.toLowerCase() : ''
+  if (job.last_run_error || job.error || /failed|error|cancelled|canceled/.test(state)) return 'blocked'
+  if (/running|active|executing/.test(state)) return 'in_progress'
+  return 'todo'
+}
+
+function normalizeJobTitle(job: ClaudeJob, profile: string | null): string {
+  const runtimePackCron = readRecord((job as Record<string, unknown>).hermes_runtime_pack_cron)
+  const summary = readStringCandidate(runtimePackCron.summary)
+  if (summary) return summary
+
+  const title = readStringCandidate(job.name, job.id) ?? 'Scheduled agent work'
+  if (!profile) return title
+
+  const profileLabel = profile
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+  const duplicatePrefix = `${profileLabel} ${profileLabel} `
+  return title.startsWith(duplicatePrefix) ? title.slice(profileLabel.length + 1) : title
+}
+
+function formatJobTimestamp(label: string, value: string | null | undefined): string | null {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return `${label}: ${parsed.toLocaleString()}`
+}
+
+function taskFromJob(job: ClaudeJob, index: number): ClaudeTask | null {
+  if (job.enabled === false) return null
+
+  const profile = normalizeJobProfile(job)
+  const runtimePackCron = readRecord((job as Record<string, unknown>).hermes_runtime_pack_cron)
+  const schedule = readStringCandidate(
+    job.schedule_display,
+    runtimePackCron.schedule_expr,
+    readRecord(job.schedule).display,
+  )
+  const title = normalizeJobTitle(job, profile)
+  const description = [
+    schedule ? `Schedule: ${schedule}` : null,
+    formatJobTimestamp('Last run', job.last_run_at),
+    formatJobTimestamp('Next run', job.next_run_at),
+    job.last_run_error ? `Last error: ${job.last_run_error}` : null,
+    job.error ? `Error: ${job.error}` : null,
+  ].filter(Boolean).join('\n')
+  const positionTimestamp =
+    Date.parse(job.next_run_at || '') ||
+    Date.parse(job.last_run_at || '') ||
+    Date.parse(job.updated_at || '') ||
+    Date.parse(job.created_at || '') ||
+    Date.now() + index
+  const createdAt = job.created_at || job.last_run_at || new Date(positionTimestamp).toISOString()
+  const updatedAt = job.updated_at || job.last_run_at || createdAt
+  const column = mapJobToColumn(job)
+
+  return {
+    id: `job:${job.id || job.jobId || index}`,
+    title,
+    description,
+    column,
+    priority: column === 'blocked' ? 'high' : 'medium',
+    assignee: profile,
+    tags: ['scheduled', ...(profile ? [profile] : [])],
+    due_date: null,
+    position: positionTimestamp,
+    created_by: 'hermes-agent',
+    created_at: createdAt,
+    updated_at: updatedAt,
+    readonly: true,
+    source: 'job',
+  }
+}
+
+async function fetchScheduledJobTasks(params?: {
+  column?: TaskColumn
+  assignee?: string
+  priority?: TaskPriority
+  include_done?: boolean
+}): Promise<Array<ClaudeTask>> {
+  const tasks = (await fetchJobs())
+    .map(taskFromJob)
+    .filter((task): task is ClaudeTask => Boolean(task))
+    .filter((task) => {
+      if (!params?.include_done && task.column === 'done') return false
+      if (params?.column && task.column !== params.column) return false
+      if (params?.assignee && task.assignee !== params.assignee) return false
+      if (params?.priority && task.priority !== params.priority) return false
+      return true
+    })
+
+  return tasks.sort((left, right) => left.position - right.position || left.title.localeCompare(right.title))
 }
 
 export async function createTask(input: CreateTaskInput): Promise<ClaudeTask> {

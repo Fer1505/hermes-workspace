@@ -59,7 +59,14 @@ function getClaudeRoot(): string {
 }
 
 export function getProfilesRoot(): string {
-  return path.join(getClaudeRoot(), 'profiles')
+  const root = getClaudeRoot()
+  const nestedProfilesRoot = path.join(root, 'profiles')
+  if (isProfileCollectionRoot(nestedProfilesRoot)) return nestedProfilesRoot
+
+  if (isHermesRootProfileDirectory(root)) return path.dirname(root)
+  if (isProfileCollectionRoot(root)) return root
+
+  return nestedProfilesRoot
 }
 
 function getActiveProfilePath(): string {
@@ -114,6 +121,34 @@ function readYamlConfig(configPath: string): Record<string, unknown> {
   }
 }
 
+function hasProfileConfig(dir: string): boolean {
+  try {
+    return (
+      fs.statSync(dir).isDirectory() &&
+      fs.existsSync(path.join(dir, 'config.yaml'))
+    )
+  } catch {
+    return false
+  }
+}
+
+function isProfileCollectionRoot(dir: string): boolean {
+  try {
+    return fs.readdirSync(dir).some((name) => hasProfileConfig(path.join(dir, name)))
+  } catch {
+    return false
+  }
+}
+
+function isHermesRootProfileDirectory(root = getClaudeRoot()): boolean {
+  const parent = path.dirname(root)
+  return (
+    hasProfileConfig(root) &&
+    path.basename(parent) === 'profiles' &&
+    isProfileCollectionRoot(parent)
+  )
+}
+
 function countFilesRecursive(
   rootPath: string,
   predicate: (fullPath: string) => boolean,
@@ -165,7 +200,31 @@ function extractDescription(config: Record<string, unknown>): string {
     if (typeof nested === 'string') return nested.trim()
   }
 
+  const systemPrompt = extractSystemPrompt(config)
+  if (systemPrompt) return summarizeSystemPrompt(systemPrompt)
+
   return ''
+}
+
+function extractSystemPrompt(config: Record<string, unknown>): string {
+  const direct = config.system_prompt
+  if (typeof direct === 'string') return direct.trim()
+
+  const agent = config.agent
+  if (agent && typeof agent === 'object' && !Array.isArray(agent)) {
+    const nested = (agent as Record<string, unknown>).system_prompt
+    if (typeof nested === 'string') return nested.trim()
+  }
+
+  return ''
+}
+
+function summarizeSystemPrompt(systemPrompt: string): string {
+  const firstSentence = systemPrompt
+    .replace(/\s+/g, ' ')
+    .trim()
+    .match(/^.+?(?:\.|\?|!)(?:\s|$)/)?.[0]
+  return (firstSentence || systemPrompt).trim()
 }
 
 // ---------------------------------------------------------------------------
@@ -261,13 +320,24 @@ export async function listProfilesWithFallback(): Promise<{
   profiles: Array<ProfileSummary>
   activeProfile: string
 }> {
-  // Try dashboard first for split-host deployments
+  // Prefer local profile discovery when the Olympus profile root is mounted.
+  // The dashboard profile API may expose only the active "default" alias while
+  // the sibling profile directories contain the real Olympus agent roster.
+  const filesystemProfiles = listProfiles()
+  if (filesystemProfiles.some((profile) => profile.name !== 'default')) {
+    return {
+      profiles: filesystemProfiles,
+      activeProfile: getActiveProfileName(),
+    }
+  }
+
+  // Try dashboard for split-host deployments without local profiles.
   const dashboardResult = await fetchDashboardProfiles()
   if (dashboardResult) return dashboardResult
 
   // Fall back to filesystem (colocated deployment)
   return {
-    profiles: listProfiles(),
+    profiles: filesystemProfiles,
     activeProfile: getActiveProfileName(),
   }
 }
@@ -340,6 +410,8 @@ export async function readProfileWithFallback(
 }
 
 export function getActiveProfileName(): string {
+  if (isHermesRootProfileDirectory()) return path.basename(getClaudeRoot())
+
   const activePath = getActiveProfilePath()
   if (!fs.existsSync(activePath)) return 'default'
   try {
@@ -354,6 +426,7 @@ export function listProfiles(): Array<ProfileSummary> {
   const profilesRoot = getProfilesRoot()
   const activeProfile = getActiveProfileName()
   const results: Array<ProfileSummary> = []
+  const rootIsProfileDirectory = isHermesRootProfileDirectory()
 
   if (fs.existsSync(profilesRoot)) {
     let entries: Array<fs.Dirent> = []
@@ -426,43 +499,45 @@ export function listProfiles(): Array<ProfileSummary> {
     }
   }
 
-  const root = getClaudeRoot()
-  const config = readYamlConfig(path.join(root, 'config.yaml'))
-  // Resolve model/provider for default profile too
-  let defaultModel: string | undefined
-  let defaultProvider: string | undefined
-  if (typeof config.model === 'string') {
-    defaultModel = config.model
-  } else if (
-    config.model &&
-    typeof config.model === 'object' &&
-    !Array.isArray(config.model)
-  ) {
-    const m = config.model as Record<string, unknown>
-    if (typeof m.default === 'string') defaultModel = m.default
-    if (typeof m.provider === 'string') defaultProvider = m.provider
+  if (!rootIsProfileDirectory) {
+    const root = getClaudeRoot()
+    const config = readYamlConfig(path.join(root, 'config.yaml'))
+    // Resolve model/provider for default profile too
+    let defaultModel: string | undefined
+    let defaultProvider: string | undefined
+    if (typeof config.model === 'string') {
+      defaultModel = config.model
+    } else if (
+      config.model &&
+      typeof config.model === 'object' &&
+      !Array.isArray(config.model)
+    ) {
+      const m = config.model as Record<string, unknown>
+      if (typeof m.default === 'string') defaultModel = m.default
+      if (typeof m.provider === 'string') defaultProvider = m.provider
+    }
+    if (!defaultProvider && typeof config.provider === 'string') {
+      defaultProvider = config.provider
+    }
+    results.unshift({
+      name: 'default',
+      path: root,
+      active: activeProfile === 'default',
+      exists: true,
+      model: defaultModel,
+      provider: defaultProvider,
+      description: extractDescription(config) || undefined,
+      skillCount: countFilesRecursive(
+        path.join(root, 'skills'),
+        (full) => path.basename(full) === 'SKILL.md',
+      ),
+      sessionCount: countFilesRecursive(path.join(root, 'sessions'), (full) =>
+        /\.(jsonl|json|sqlite|db)$/i.test(full),
+      ),
+      hasEnv: fs.existsSync(path.join(root, '.env')),
+      updatedAt: latestMtime([root, path.join(root, 'config.yaml')]),
+    })
   }
-  if (!defaultProvider && typeof config.provider === 'string') {
-    defaultProvider = config.provider
-  }
-  results.unshift({
-    name: 'default',
-    path: root,
-    active: activeProfile === 'default',
-    exists: true,
-    model: defaultModel,
-    provider: defaultProvider,
-    description: extractDescription(config) || undefined,
-    skillCount: countFilesRecursive(
-      path.join(root, 'skills'),
-      (full) => path.basename(full) === 'SKILL.md',
-    ),
-    sessionCount: countFilesRecursive(path.join(root, 'sessions'), (full) =>
-      /\.(jsonl|json|sqlite|db)$/i.test(full),
-    ),
-    hasEnv: fs.existsSync(path.join(root, '.env')),
-    updatedAt: latestMtime([root, path.join(root, 'config.yaml')]),
-  })
 
   results.sort((a, b) => {
     if (a.active && !b.active) return -1

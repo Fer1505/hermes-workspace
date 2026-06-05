@@ -158,19 +158,54 @@ function normalizeRun(row: Record<string, unknown>, index: number): CronRun {
   }
 }
 
+function readScheduleDisplay(row: Record<string, unknown>): string {
+  const scheduleRecord = asRecord(row.schedule)
+  return (
+    readStringCandidate(
+      row.schedule_display,
+      row.scheduleDisplay,
+      scheduleRecord.display,
+      scheduleRecord.expr,
+      row.cron,
+      row.schedule,
+    ) ?? '* * * * *'
+  )
+}
+
 function normalizeJob(row: Record<string, unknown>, index: number): CronJob {
   const lastRunRow = row.lastRun
+  const runtimePackCron = asRecord(row.hermes_runtime_pack_cron)
+  const profile = readStringCandidate(
+    row.profile,
+    row.profile_name,
+    runtimePackCron.profile,
+    runtimePackCron.runtime_pack_id,
+  )
   const lastRun =
     lastRunRow && typeof lastRunRow === 'object'
       ? normalizeRun(lastRunRow as Record<string, unknown>, index)
       : normalizeRun(
           {
-            id: row.lastRunId,
-            status: row.lastRunStatus,
-            startedAt: row.lastRunAt,
-            finishedAt: row.lastRunCompletedAt,
-            durationMs: row.lastRunDurationMs,
-            error: row.lastRunError,
+            id: row.lastRunId ?? row.last_run_id,
+            status:
+              row.lastRunStatus ??
+              row.last_status ??
+              (row.last_run_success === true
+                ? 'success'
+                : row.last_run_error
+                  ? 'error'
+                  : undefined),
+            startedAt: row.lastRunAt ?? row.last_run_at,
+            finishedAt:
+              row.lastRunCompletedAt ??
+              row.last_run_completed_at ??
+              row.last_finished_at,
+            durationMs: row.lastRunDurationMs ?? row.last_run_duration_ms,
+            error: row.lastRunError ?? row.last_error ?? row.last_run_error,
+            deliverySummary:
+              row.lastDeliverySummary ??
+              row.last_delivery_summary ??
+              row.last_delivery_error,
           },
           index,
         )
@@ -184,17 +219,19 @@ function normalizeJob(row: Record<string, unknown>, index: number): CronJob {
       (typeof row.name === 'string' && row.name) ||
       (typeof row.title === 'string' && row.title) ||
       `Cron Job ${index + 1}`,
-    schedule:
-      (typeof row.schedule === 'string' && row.schedule) ||
-      (typeof row.cron === 'string' && row.cron) ||
-      '* * * * *',
+    schedule: readScheduleDisplay(row),
     enabled: Boolean(row.enabled),
+    profile,
     payload: row.payload,
     deliveryConfig: row.deliveryConfig,
     status: typeof row.status === 'string' ? row.status : undefined,
-    description:
-      typeof row.description === 'string' ? row.description : undefined,
+    description: readStringCandidate(
+      row.description,
+      row.summary,
+      runtimePackCron.summary,
+    ),
     lastRun,
+    nextRunAt: normalizeTimestamp(row.nextRunAt ?? row.next_run_at),
   }
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import type { Dispatch, SetStateAction } from 'react'
 import type { GatewaySession } from '@/lib/gateway-api'
-import { fetchSessions } from '@/lib/gateway-api'
+import { fetchSessions, supportsArbitrarySessionControls } from '@/lib/gateway-api'
 
 type HistoryMessagePart = {
   type?: string
@@ -172,14 +172,15 @@ const HISTORY_STORAGE_KEY = 'conductor:history'
 const MAX_HISTORY_ENTRIES = 50
 
 const AGENT_NAMES = [
-  'Nova',
-  'Pixel',
-  'Blaze',
-  'Echo',
-  'Sage',
-  'Drift',
-  'Flux',
-  'Volt',
+  'Athena',
+  'Atlas',
+  'Hephaestus',
+  'Hestia',
+  'Mercury',
+  'Olympus Hermes',
+  'Plutus',
+  'Prometheus',
+  'Themis',
 ]
 const AGENT_EMOJIS = ['🤖', '⚡', '🔥', '🌊', '🌿', '💫', '🔮', '⭐']
 
@@ -2233,6 +2234,7 @@ export function useConductorGateway() {
     workerOutputs,
     conductorSettings,
     setConductorSettings,
+    canPauseMission: supportsArbitrarySessionControls(),
     sendMission: (nextGoal: string) =>
       sendMission.mutateAsync({ nextGoal, settings: conductorSettings }),
     pauseAgent: (sessionKey: string, pause: boolean) =>

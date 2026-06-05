@@ -73,6 +73,12 @@ export function OperationsScreen() {
     (cronJobsQuery.error instanceof Error && cronJobsQuery.error.message) ||
     null
   const settingsAgent = agents.find((agent) => agent.id === settingsAgentId) ?? null
+  const orchestratorAgent =
+    agents.find((agent) => agent.profileName === 'olympus-hermes') ??
+    agents.find((agent) => agent.id === 'olympus-hermes') ??
+    agents[0] ??
+    null
+  const orchestratorDisplayName = orchestratorAgent?.name || 'Olympus Hermes'
 
   return (
     <main
@@ -155,6 +161,7 @@ export function OperationsScreen() {
               transition={{ duration: 0.25 }}
             >
               <OrchestratorCard
+                defaultName={orchestratorDisplayName}
                 totalAgents={agents.length}
               />
             </motion.div>

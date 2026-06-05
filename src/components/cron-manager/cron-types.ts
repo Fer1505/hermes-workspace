@@ -22,6 +22,7 @@ export type CronJob = {
   name: string
   schedule: string
   enabled: boolean
+  profile?: string
   payload?: unknown
   deliveryConfig?: unknown
   status?: string

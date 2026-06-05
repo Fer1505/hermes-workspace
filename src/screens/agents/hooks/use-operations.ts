@@ -16,6 +16,7 @@ type ClaudeProfileSummary = {
   exists: boolean
   model?: string
   provider?: string
+  description?: string
   skillCount: number
   sessionCount: number
   hasEnv: boolean
@@ -26,6 +27,9 @@ export type GatewayConfigAgent = {
   id: string
   name: string
   model: string
+  profileName?: string
+  description?: string
+  systemPrompt?: string
   workspace?: string
   agentDir?: string
 }
@@ -204,6 +208,9 @@ function normalizeAgentList(input: unknown): GatewayConfigAgent[] {
       id,
       name: readString(row.name) || id,
       model: readString(row.model),
+      profileName: readString(row.profileName) || undefined,
+      description: readString(row.description) || undefined,
+      systemPrompt: readString(row.systemPrompt) || undefined,
       workspace: readString(row.workspace) || undefined,
       agentDir: readString(row.agentDir) || undefined,
     })
@@ -235,19 +242,45 @@ async function fetchClaudeProfiles(): Promise<ClaudeProfileSummary[]> {
   return Array.isArray(payload.profiles) ? payload.profiles : []
 }
 
+function profileNameFromPath(profile: ClaudeProfileSummary): string {
+  if (profile.name !== 'default') return profile.name
+  const segments = profile.path.split(/[\\/]+/).filter(Boolean)
+  return segments[segments.length - 1] || profile.name
+}
+
+export function formatProfileDisplayName(profileName: string): string {
+  const normalized = profileName.trim()
+  if (!normalized) return ''
+  if (normalized === 'default') return 'Workspace'
+  return normalized
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
 // Adapt Hermes profiles into the ConfigPayload shape that the existing
 // Operations UI expects. Each profile becomes one agent.
 async function fetchOperationsConfig(): Promise<ConfigPayload> {
   const profiles = await fetchClaudeProfiles()
   const list = profiles.map((profile) => ({
     id: profile.name,
-    name: profile.name === 'default' ? 'Workspace' : profile.name,
+    name: formatProfileDisplayName(profile.name),
     model: profile.model || '',
+    profileName: profileNameFromPath(profile),
+    description: profile.description || '',
+    systemPrompt: profile.description || '',
     workspace: profile.path,
     agentDir: profile.path,
   }))
-  // Default-profile model becomes the operations defaultModel suggestion
-  const defaultModel = profiles.find((p) => p.name === 'default')?.model || ''
+  // The active Olympus profile is the best new-agent model suggestion. Older
+  // deployments still expose a root-backed "default" profile, so keep it as a
+  // fallback.
+  const defaultModel =
+    profiles.find((p) => p.active)?.model ||
+    profiles.find((p) => p.name === 'default')?.model ||
+    profiles[0]?.model ||
+    ''
   return {
     ok: true,
     parsed: {
@@ -307,12 +340,15 @@ async function deleteClaudeProfile(name: string) {
   }
 }
 
-function loadAgentMeta(agentId: string): OperationsAgentMeta {
+function loadAgentMeta(
+  agentId: string,
+  fallback?: { description?: string; systemPrompt?: string },
+): OperationsAgentMeta {
   if (typeof window === 'undefined') {
     return {
       emoji: createFallbackEmoji(agentId),
-      description: '',
-      systemPrompt: '',
+      description: fallback?.description ?? '',
+      systemPrompt: fallback?.systemPrompt ?? '',
       color: createFallbackColor(agentId),
       createdAt: new Date().toISOString(),
     }
@@ -323,8 +359,8 @@ function loadAgentMeta(agentId: string): OperationsAgentMeta {
     if (!raw) {
       return {
         emoji: createFallbackEmoji(agentId),
-        description: '',
-        systemPrompt: '',
+        description: fallback?.description ?? '',
+        systemPrompt: fallback?.systemPrompt ?? '',
         color: createFallbackColor(agentId),
         createdAt: new Date().toISOString(),
       }
@@ -333,16 +369,16 @@ function loadAgentMeta(agentId: string): OperationsAgentMeta {
     const parsed = JSON.parse(raw) as Partial<OperationsAgentMeta>
     return {
       emoji: readString(parsed.emoji) || createFallbackEmoji(agentId),
-      description: readString(parsed.description),
-      systemPrompt: readString(parsed.systemPrompt),
+      description: readString(parsed.description) || fallback?.description || '',
+      systemPrompt: readString(parsed.systemPrompt) || fallback?.systemPrompt || '',
       color: readString(parsed.color) || createFallbackColor(agentId),
       createdAt: readString(parsed.createdAt) || new Date().toISOString(),
     }
   } catch {
     return {
       emoji: createFallbackEmoji(agentId),
-      description: '',
-      systemPrompt: '',
+      description: fallback?.description ?? '',
+      systemPrompt: fallback?.systemPrompt ?? '',
       color: createFallbackColor(agentId),
       createdAt: new Date().toISOString(),
     }
@@ -396,8 +432,12 @@ function persistSettings(settings: OperationsSettings) {
 
 
 
-function getAgentJobs(agentId: string, jobs: CronJob[]): CronJob[] {
-  return jobs.filter((job) => job.name?.startsWith(`ops:${agentId}:`))
+function getAgentJobs(agent: GatewayConfigAgent, jobs: CronJob[]): CronJob[] {
+  const linkedIds = new Set([agent.id, agent.profileName].filter(Boolean))
+  return jobs.filter((job) => {
+    if (job.name.startsWith(`ops:${agent.id}:`)) return true
+    return Boolean(job.profile && linkedIds.has(job.profile))
+  })
 }
 
 function getAgentSessions(agentId: string, sessions: GatewaySession[]): GatewaySession[] {
@@ -549,10 +589,13 @@ export function useOperations() {
     const cronJobs = cronJobsQuery.data ?? []
 
     return configAgents.map((agent) => {
-      const meta = loadAgentMeta(agent.id)
+      const meta = loadAgentMeta(agent.id, {
+        description: agent.description,
+        systemPrompt: agent.systemPrompt,
+      })
       const agentSessions = getAgentSessions(agent.id, sessions)
       const latestSession = agentSessions[0] ?? null
-      const jobs = getAgentJobs(agent.id, cronJobs)
+      const jobs = getAgentJobs(agent, cronJobs)
       const nextRunAt = jobs
         .filter((job) => job.enabled)
         .map((job) => readTimestamp(job.nextRunAt))
