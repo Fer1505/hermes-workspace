@@ -34,7 +34,9 @@ Current implementation detects:
 For git installs:
 
 - Workspace updates use `origin/<branch>` and require a clean, fast-forwardable checkout.
-- Agent updates call the Agent's own `hermes update` command and require a clean Agent checkout.
+- Agent updates use the configured Agent checkout and update remote
+  (`HERMES_AGENT_REPO`, optional `HERMES_AGENT_UPDATE_REMOTE`, optional
+  `HERMES_AGENT_UPDATE_BRANCH`) and require a clean, fast-forwardable checkout.
 - Dirty or non-fast-forward states are blocked and surfaced as review-required, not as a copy-command primary path.
 
 ## Desktop behavior to wire next
