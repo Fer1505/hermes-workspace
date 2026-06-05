@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Cancel01Icon,
@@ -33,6 +33,17 @@ const AGENT_LENSES: Array<{ id: AgentLens; label: string }> = [
   { id: 'blocked', label: 'Blocked' },
   { id: 'ready', label: 'Ready' },
 ]
+
+export function resolveSwarmOrchestratorDefaultName(members: Array<CrewMember>): string {
+  const olympusHermes = members.find((member) => member.id === 'olympus-hermes')
+  const olympusHermesName = olympusHermes?.displayName.trim()
+  if (olympusHermesName) return olympusHermesName
+
+  const hermesProfileName = members
+    .find((member) => member.id !== 'workspace' && member.displayName.toLowerCase().includes('hermes'))
+    ?.displayName.trim()
+  return hermesProfileName || DEFAULT_NAME
+}
 
 export type Swarm2OrchestratorCardProps = {
   totalWorkers: number
@@ -94,11 +105,12 @@ export function Swarm2OrchestratorCard({
   const [swarmCardMode, setSwarmCardMode] = useState<SwarmCardMode>('cards')
   const [agentLens, setAgentLens] = useState<AgentLens>('all')
   const [agentPage, setAgentPage] = useState(0)
-  const [name, setName] = useState(() => {
-    if (typeof window === 'undefined') return DEFAULT_NAME
-    return window.localStorage.getItem(ORCHESTRATOR_NAME_KEY) || DEFAULT_NAME
-  })
+  const [name, setName] = useState(DEFAULT_NAME)
   const [draftName, setDraftName] = useState(name)
+  const resolvedDefaultName = useMemo(
+    () => resolveSwarmOrchestratorDefaultName(members),
+    [members],
+  )
   const anchorCallbackRef = useCallback(
     (node: HTMLDivElement | null) => {
       onAnchorRef?.(node)
@@ -106,13 +118,29 @@ export function Swarm2OrchestratorCard({
     [onAnchorRef],
   )
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const storedName = window.localStorage.getItem(ORCHESTRATOR_NAME_KEY)
+    const nextName =
+      storedName && storedName !== DEFAULT_NAME
+        ? storedName
+        : resolvedDefaultName
+
+    if (!storedName || storedName === DEFAULT_NAME) {
+      window.localStorage.setItem(ORCHESTRATOR_NAME_KEY, nextName)
+    }
+
+    setName(nextName)
+    setDraftName(nextName)
+  }, [resolvedDefaultName])
+
   function openSettings() {
     setDraftName(name)
     setSettingsOpen(true)
   }
 
   function saveSettings() {
-    const next = draftName.trim() || DEFAULT_NAME
+    const next = draftName.trim() || resolvedDefaultName
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(ORCHESTRATOR_NAME_KEY, next)
     }

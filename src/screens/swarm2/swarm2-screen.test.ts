@@ -82,6 +82,30 @@ describe('Swarm2 surface contract', () => {
 })
 
 import { __runtimeTabInternals } from './swarm2-screen'
+import { buildVisibleSwarmMembers } from './swarm2-screen'
+import { resolveSwarmOrchestratorDefaultName } from './swarm2-orchestrator-card'
+import type { CrewMember } from '@/hooks/use-crew-status'
+
+describe('Swarm2 orchestrator naming', () => {
+  const namedMember = (id: string, displayName: string) => ({
+    id,
+    displayName,
+  }) as CrewMember
+
+  it('uses the Olympus Hermes profile name instead of the generic main-agent default', () => {
+    expect(resolveSwarmOrchestratorDefaultName([
+      namedMember('workspace', 'Workspace'),
+      namedMember('olympus-hermes', 'Olympus Hermes'),
+    ])).toBe('Olympus Hermes')
+  })
+
+  it('falls back to the legacy default only when no Hermes profile is present', () => {
+    expect(resolveSwarmOrchestratorDefaultName([
+      namedMember('workspace', 'Workspace'),
+      namedMember('athena', 'Athena'),
+    ])).toBe('Main Agent')
+  })
+})
 
 describe('Swarm2 runtime tab command resolution', () => {
   const { commandForRuntime } = __runtimeTabInternals
@@ -210,3 +234,84 @@ describe('Swarm2 runtime tab command resolution', () => {
   })
 })
 
+describe('Swarm2 visible worker roster', () => {
+  function crewMember(id: string, displayName: string): CrewMember {
+    return {
+      id,
+      displayName,
+      role: 'Profile',
+      profileFound: true,
+      gatewayState: 'running',
+      processAlive: true,
+      platforms: {},
+      model: 'gpt-5.5',
+      provider: 'openai-codex',
+      lastSessionTitle: null,
+      lastSessionAt: null,
+      sessionCount: 0,
+      messageCount: 0,
+      toolCallCount: 0,
+      totalTokens: 0,
+      estimatedCostUsd: null,
+      cronJobCount: 0,
+      assignedTaskCount: 0,
+    }
+  }
+
+  it('filters roster-only role workers from the rendered Swarm member list', () => {
+    const members = buildVisibleSwarmMembers({
+      crew: [
+        crewMember('athena', 'Athena'),
+        crewMember('olympus-hermes', 'Olympus Hermes'),
+      ],
+      roomIds: [],
+      runtimeByWorker: new Map([
+        ['athena', {
+          workerId: 'athena',
+          displayName: 'athena',
+          role: 'Worker',
+          currentTask: null,
+          recentLogTail: null,
+          pid: null,
+          startedAt: null,
+          lastOutputAt: null,
+          cwd: null,
+          tmuxSession: null,
+          tmuxAttachable: false,
+        }],
+      ]),
+      rosterWorkers: [
+        {
+          id: 'builder',
+          name: 'Builder',
+          role: 'Scoped Implementation Agent',
+          mission: 'Ship scoped product/code slices.',
+          skills: ['builder-core'],
+        },
+        {
+          id: 'athena',
+          name: 'athena',
+          role: 'Worker',
+          model: 'Worker',
+          mission: 'Awaiting orchestrator dispatch.',
+          skills: [],
+          capabilities: [],
+          preferredTaskTypes: [],
+          maxConcurrentTasks: 1,
+          acceptsBroadcast: true,
+          reviewRequired: false,
+        },
+      ],
+    })
+
+    expect(members.map((member) => member.id)).toEqual([
+      'athena',
+      'olympus-hermes',
+    ])
+    expect(members.find((member) => member.id === 'athena')).toMatchObject({
+      displayName: 'Athena',
+      role: 'Profile',
+      model: 'gpt-5.5',
+    })
+  })
+})

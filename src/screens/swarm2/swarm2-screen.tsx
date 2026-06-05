@@ -486,6 +486,78 @@ function sortSwarmMembers(members: Array<CrewMember>, roomIds: Array<string>) {
     })
 }
 
+function hasMeaningfulRosterMetadata(worker: SwarmRosterWorker | undefined): worker is SwarmRosterWorker {
+  if (!worker) return false
+  const mission = worker.mission?.trim()
+  return Boolean(
+    (worker.name.trim() && worker.name.trim().toLowerCase() !== worker.id.toLowerCase()) ||
+      (worker.role.trim() && worker.role.trim() !== 'Worker') ||
+      (worker.model?.trim() && worker.model.trim() !== 'Worker') ||
+      worker.specialty?.trim() ||
+      (mission && mission !== 'Awaiting orchestrator dispatch.') ||
+      worker.skills?.length ||
+      worker.capabilities?.length ||
+      worker.defaultCwd?.trim() ||
+      worker.preferredTaskTypes?.length ||
+      worker.reviewRequired ||
+      worker.acceptsBroadcast === false ||
+      worker.maxConcurrentTasks !== 1,
+  )
+}
+
+function usefulDisplayName(value: string | null | undefined, workerId: string): string {
+  const trimmed = value?.trim() ?? ''
+  if (!trimmed || trimmed.toLowerCase() === workerId.toLowerCase()) return ''
+  return trimmed
+}
+
+function usefulRole(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? ''
+  return trimmed && trimmed !== 'Worker' ? trimmed : ''
+}
+
+function usefulModel(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? ''
+  return trimmed && trimmed !== 'Worker' ? trimmed : ''
+}
+
+export function buildVisibleSwarmMembers({
+  crew,
+  roomIds,
+  runtimeByWorker,
+  rosterWorkers,
+}: {
+  crew: Array<CrewMember>
+  roomIds: Array<string>
+  runtimeByWorker: Map<string, RuntimeEntry>
+  rosterWorkers: Array<SwarmRosterWorker>
+}): Array<CrewMember> {
+  const rosterById = new Map(rosterWorkers.map((worker) => [worker.id, worker]))
+
+  return sortSwarmMembers(crew, roomIds).map((member) => {
+    const runtime = runtimeByWorker.get(member.id)
+    const roster = rosterById.get(member.id)
+    const meaningfulRoster = hasMeaningfulRosterMetadata(roster) ? roster : undefined
+
+    return {
+      ...member,
+      displayName:
+        usefulDisplayName(meaningfulRoster?.name, member.id) ||
+        usefulDisplayName(runtime?.displayName, member.id) ||
+        member.displayName,
+      role:
+        usefulRole(meaningfulRoster?.role) ||
+        usefulRole(runtime?.role) ||
+        member.role,
+      specialty: meaningfulRoster?.specialty || member.specialty,
+      mission: meaningfulRoster?.mission || member.mission,
+      skills: meaningfulRoster?.skills ?? member.skills ?? [],
+      capabilities: meaningfulRoster?.capabilities ?? member.capabilities ?? [],
+      model: usefulModel(meaningfulRoster?.model) || member.model,
+    }
+  })
+}
+
 function compactText(value: string | null | undefined, max = 38): string {
   if (!value) return '—'
   return value.length > max ? `${value.slice(0, max)}…` : value
@@ -1145,48 +1217,12 @@ export function Swarm2Screen() {
     return map
   }, [runtimeQuery.data])
   const members = useMemo(() => {
-    const merged = sortSwarmMembers(crew, roomIds).map((member) => {
-      const runtime = runtimeByWorker.get(member.id)
-      const roster = rosterQuery.data?.find((worker) => worker.id === member.id)
-      return {
-        ...member,
-        displayName: runtime?.displayName || roster?.name || member.displayName,
-        role: roster?.role || runtime?.role || member.role,
-        specialty: roster?.specialty,
-        mission: roster?.mission,
-        skills: roster?.skills ?? [],
-        capabilities: roster?.capabilities ?? [],
-        model: roster?.model || member.model,
-      }
+    return buildVisibleSwarmMembers({
+      crew,
+      roomIds,
+      runtimeByWorker,
+      rosterWorkers: rosterQuery.data ?? [],
     })
-    const seen = new Set(merged.map((member) => member.id))
-    const extras = (rosterQuery.data ?? [])
-      .filter((worker) => !seen.has(worker.id))
-      .map((worker) => ({
-        id: worker.id,
-        displayName: worker.name || worker.id,
-        role: worker.role || 'Worker',
-        profileFound: false,
-        gatewayState: 'unknown',
-        processAlive: false,
-        platforms: {},
-        model: worker.model || 'unknown',
-        provider: 'roster-only',
-        specialty: worker.specialty,
-        mission: worker.mission,
-        skills: worker.skills ?? [],
-        capabilities: worker.capabilities ?? [],
-        lastSessionTitle: worker.mission || null,
-        lastSessionAt: null,
-        sessionCount: 0,
-        messageCount: 0,
-        toolCallCount: 0,
-        totalTokens: 0,
-        estimatedCostUsd: null,
-        cronJobCount: 0,
-        assignedTaskCount: 0,
-      }))
-    return sortSwarmMembers([...merged, ...extras], roomIds)
   }, [crew, roomIds, runtimeByWorker, rosterQuery.data])
 
   useEffect(() => {
