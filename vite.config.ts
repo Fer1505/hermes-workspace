@@ -140,10 +140,19 @@ async function isClaudeAgentHealthy(port = 8642): Promise<boolean> {
 
 const config = defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), '')
+  // Bridge loadEnv into process.env for server-side SSR runtime code that
+  // reads env vars directly from process.env (e.g. getBearerToken() in
+  // openai-compat-api.ts reads process.env.HERMES_API_TOKEN). Without this,
+  // Vite's loadEnv only populates the local `env` object — not process.env.
+  for (const key of Object.keys(env)) {
+    if (!(key in process.env)) {
+      process.env[key] = env[key]
+    }
+  }
   const claudeApiUrl =
     env.HERMES_API_URL?.trim() ||
     env.CLAUDE_API_URL?.trim() ||
-    'http://127.0.0.1:8642'
+    'http://127.0.0.1:8642' 
   // /api/connection-status is handled by the real route file at
   // src/routes/api/connection-status.ts; the dev server no longer
   // intercepts that path with a slim shortcut. See #285.
@@ -555,8 +564,23 @@ const config = defineConfig(({ mode, command }) => {
       ],
     },
     server: {
-      // Loopback by default. Remote/LAN/Tailscale dev serving is an explicit
-      // opt-in via HOST or HERMES_DEV_SERVER_HOST.
+      // Cross-origin isolation so the embedded HermesWorld WebGL client keeps
+      // SharedArrayBuffer multithreading (matches the standalone web client at
+      // play.hermes-world.ai). Without these, the iframe silently drops to a
+      // single thread → render+physics+netcode contend on one thread → inflated
+      // ping / worse frame pacing even though network RTT is identical.
+      // COEP 'credentialless' enables isolation WITHOUT requiring CORP headers
+      // on every cross-origin asset (fonts/images); the web client already sends
+      // cross-origin-resource-policy: cross-origin so the iframe still embeds.
+      // Same-origin agent API (/ws-claude, /api/claude-proxy) is unaffected.
+      headers: {
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'credentialless',
+      },
+      // Force IPv4 — 'localhost' resolves to ::1 (IPv6) on Windows, breaking connectivity
+      // Olympus posture: loopback by default. Remote/LAN/Tailscale dev serving
+      // is an explicit opt-in via HOST or HERMES_DEV_SERVER_HOST; never bind
+      // 0.0.0.0 by default on the production Mac.
       host: devServerHost,
       // Port precedence:
       //   1. --port CLI flag (wins, but we no longer hardcode it in package.json)
@@ -651,6 +675,17 @@ const config = defineConfig(({ mode, command }) => {
           if (command !== 'serve') return
         },
         configureServer(server) {
+          // Cross-origin isolation headers on EVERY response so the embedded
+          // HermesWorld WebGL client keeps SharedArrayBuffer multithreading
+          // (matches play.hermes-world.ai). Injected via middleware because the
+          // TanStack Start SSR handler owns the HTML response and overrides
+          // vite's server.headers. COEP 'credentialless' avoids requiring CORP
+          // on every cross-origin asset; same-origin agent API is unaffected.
+          server.middlewares.use((_req, res, next) => {
+            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless')
+            next()
+          })
           server.middlewares.use(async (req, res, next) => {
             const requestPath = req.url?.split('?')[0]
             if (req.method === 'GET' && requestPath === '/api/healthcheck') {
@@ -720,14 +755,18 @@ const config = defineConfig(({ mode, command }) => {
             }
           })
 
-          // Auto-start hermes-agent when dev server launches
-          if (command === 'serve') {
+          // Auto-start hermes-agent when dev server launches.
+          // Skip when launchd manages the gateway (HERMES_WORKSPACE_AUTO_START_AGENT=false)
+          // to avoid SIGTERM cycle on close that nukes the launchd-managed process.
+          const autoStartAgent =
+            process.env.HERMES_WORKSPACE_AUTO_START_AGENT !== 'false'
+          if (command === 'serve' && autoStartAgent) {
             void startClaudeAgent()
           }
 
-          // Shutdown hermes-agent when dev server stops
+          // Shutdown hermes-agent when dev server stops — only if we spawned it.
           server.httpServer?.on('close', () => {
-            if (claudeAgentChild) {
+            if (claudeAgentChild && autoStartAgent) {
               console.log('[hermes-agent] Stopping...')
               claudeAgentChild.kill('SIGTERM')
               claudeAgentChild = null

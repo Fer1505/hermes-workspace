@@ -11,6 +11,7 @@ export type ProfileSummary = {
   model?: string
   provider?: string
   description?: string
+  systemPrompt?: string
   skillCount: number
   sessionCount: number
   hasEnv: boolean
@@ -23,6 +24,7 @@ export type ProfileDetail = {
   active: boolean
   config: Record<string, unknown>
   description: string
+  systemPrompt: string
   envPath?: string
   hasEnv: boolean
   sessionsDir?: string
@@ -206,17 +208,28 @@ function extractDescription(config: Record<string, unknown>): string {
   return ''
 }
 
-function extractSystemPrompt(config: Record<string, unknown>): string {
+function extractSystemPrompt(
+  config: Record<string, unknown>,
+  profilePath?: string,
+): string {
   const direct = config.system_prompt
-  if (typeof direct === 'string') return direct.trim()
+  if (typeof direct === 'string' && direct.trim()) return direct.trim()
 
   const agent = config.agent
   if (agent && typeof agent === 'object' && !Array.isArray(agent)) {
     const nested = (agent as Record<string, unknown>).system_prompt
-    if (typeof nested === 'string') return nested.trim()
+    if (typeof nested === 'string' && nested.trim()) return nested.trim()
   }
 
-  return ''
+  if (!profilePath) return ''
+  const soulPath = path.join(profilePath, 'SOUL.md')
+  if (!fs.existsSync(soulPath)) return ''
+
+  try {
+    return safeReadText(soulPath).trim()
+  } catch {
+    return ''
+  }
 }
 
 function summarizeSystemPrompt(systemPrompt: string): string {
@@ -397,6 +410,7 @@ export async function readProfileWithFallback(
               ...(match.provider ? { provider: match.provider } : {}),
             },
             description: match.description || '',
+            systemPrompt: '',
             hasEnv: false,
           }
         }
@@ -485,6 +499,7 @@ export function listProfiles(): Array<ProfileSummary> {
         model: modelName,
         provider: providerName,
         description: extractDescription(config) || undefined,
+        systemPrompt: extractSystemPrompt(config, profilePath) || undefined,
         skillCount,
         sessionCount,
         hasEnv: fs.existsSync(envPath),
@@ -538,6 +553,28 @@ export function listProfiles(): Array<ProfileSummary> {
       updatedAt: latestMtime([root, path.join(root, 'config.yaml')]),
     })
   }
+  if (!defaultProvider && typeof config.provider === 'string') {
+    defaultProvider = config.provider
+  }
+  results.unshift({
+    name: 'default',
+    path: root,
+    active: activeProfile === 'default',
+    exists: true,
+    model: defaultModel,
+    provider: defaultProvider,
+    description: extractDescription(config) || undefined,
+    systemPrompt: extractSystemPrompt(config, root) || undefined,
+    skillCount: countFilesRecursive(
+      path.join(root, 'skills'),
+      (full) => path.basename(full) === 'SKILL.md',
+    ),
+    sessionCount: countFilesRecursive(path.join(root, 'sessions'), (full) =>
+      /\.(jsonl|json|sqlite|db)$/i.test(full),
+    ),
+    hasEnv: fs.existsSync(path.join(root, '.env')),
+    updatedAt: latestMtime([root, path.join(root, 'config.yaml')]),
+  })
 
   results.sort((a, b) => {
     if (a.active && !b.active) return -1
@@ -566,6 +603,7 @@ export function readProfile(name: string): ProfileDetail {
     active: normalized === active,
     config,
     description: extractDescription(config),
+    systemPrompt: extractSystemPrompt(config, profilePath),
     envPath: fs.existsSync(envPath) ? envPath : undefined,
     hasEnv: fs.existsSync(envPath),
     sessionsDir: fs.existsSync(sessionsDir) ? sessionsDir : undefined,

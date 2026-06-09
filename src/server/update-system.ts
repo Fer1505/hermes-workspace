@@ -195,17 +195,7 @@ function isDirty(repoPath: string): boolean {
  * each entry is the relative path inside the repo (XY status code stripped).
  */
 function listDirtyFiles(repoPath: string, limit = 24): Array<string> {
-  let raw = ''
-  try {
-    raw = execFileSync('git', ['status', '--porcelain'], {
-      cwd: repoPath,
-      encoding: 'utf8',
-      timeout: 8_000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-  } catch {
-    return []
-  }
+  const raw = git(['status', '--porcelain'], repoPath)
   if (!raw) return []
   const out: Array<string> = []
   for (const line of raw.split('\n')) {
@@ -231,20 +221,34 @@ function canResetToRemote(repoPath: string, remoteRef: string): boolean {
   return Boolean(git(['rev-parse', '--verify', remoteRef], repoPath, 10_000))
 }
 
-function remoteBranchHead(
-  repoPath: string,
-  remote: string,
-  branch: string,
-): string | null {
-  const raw = exec('git', ['ls-remote', remote, `refs/heads/${branch}`], {
-    cwd: repoPath,
-    timeout: 10_000,
-  })
-  return raw?.split(/\s+/)[0] ?? null
+function branchDivergence(repoPath: string, remoteRef: string): { ahead: number; behind: number } | null {
+  const raw = git(['rev-list', '--left-right', '--count', `HEAD...${remoteRef}`], repoPath, 10_000)
+  if (!raw) return null
+  const [aheadRaw, behindRaw] = raw.split(/\s+/)
+  const ahead = Number(aheadRaw)
+  const behind = Number(behindRaw)
+  if (!Number.isFinite(ahead) || !Number.isFinite(behind)) return null
+  return { ahead, behind }
+}
+
+export function updateAvailableFromDivergence(
+  divergence: { ahead: number; behind: number } | null,
+  headsDiffer: boolean,
+): boolean {
+  // A local checkout can legitimately be ahead of origin because it carries
+  // hotfixes or unpublished commits. That is not an available upstream update.
+  // Only remote-ahead or diverged histories should surface as updateable.
+  return divergence ? divergence.behind > 0 : headsDiffer
 }
 
 function syncRepoToRemote(repoPath: string, remoteRef: string): string {
-  return execOrThrow('git', ['merge', '--ff-only', remoteRef], {
+  if (canFastForward(repoPath, remoteRef)) {
+    return execOrThrow('git', ['merge', '--ff-only', remoteRef], {
+      cwd: repoPath,
+      timeout: 60_000,
+    })
+  }
+  return execOrThrow('git', ['reset', '--hard', remoteRef], {
     cwd: repoPath,
     timeout: 60_000,
   })
@@ -354,19 +358,15 @@ export function readWorkspaceUpdateStatus(
   const latestHead =
     repoMatches && supportedBranch ? remoteHead(gitRepo, 'origin') : null
   const dirty = isDirty(gitRepo)
-  const updateAvailable = Boolean(
-    supportedBranch && currentHead && latestHead && currentHead !== latestHead,
-  )
   const remoteRef = `origin/${branch || 'main'}`
+  const divergence = latestHead ? branchDivergence(gitRepo, remoteRef) : null
+  const updateAvailable = Boolean(
+    supportedBranch && currentHead && latestHead && updateAvailableFromDivergence(divergence, currentHead !== latestHead),
+  )
   const canSync = updateAvailable ? canResetToRemote(gitRepo, remoteRef) : true
   const ff = updateAvailable ? canFastForward(gitRepo, remoteRef) : true
   const canUpdate = Boolean(
-    repoMatches &&
-    supportedBranch &&
-    updateAvailable &&
-    !dirty &&
-    canSync &&
-    ff,
+    repoMatches && supportedBranch && updateAvailable && !dirty && canSync,
   )
 
   return {
@@ -388,7 +388,7 @@ export function readWorkspaceUpdateStatus(
         : dirty
           ? 'blocked'
           : updateAvailable
-            ? canSync && ff
+            ? canSync
               ? 'available'
               : 'blocked'
             : 'current',
@@ -401,7 +401,7 @@ export function readWorkspaceUpdateStatus(
           : updateAvailable && !canSync
             ? 'Workspace update could not verify the remote branch ref.'
             : updateAvailable && !ff
-              ? 'Workspace branch diverged from origin. One-click update is blocked until the branch is manually reconciled.'
+              ? 'Workspace branch diverged from origin. One-click update will realign to the remote branch.'
               : null,
     blockingFiles: dirty ? listDirtyFiles(gitRepo) : undefined,
     updateMode: 'git-ff',
@@ -411,8 +411,6 @@ export function readWorkspaceUpdateStatus(
 function agentRepoPath(): string | null {
   const candidates = [
     process.env.HERMES_AGENT_REPO,
-    process.env.HERMES_AGENT_SOURCE_CHECKOUT,
-    process.env.HERMES_AGENT_CHECKOUT,
     join(homedir(), '.hermes', 'hermes-agent'),
     join(homedir(), 'Projects', 'hermes-agent'),
     join(homedir(), 'hermes-agent'),
@@ -424,21 +422,11 @@ function agentRepoPath(): string | null {
   return null
 }
 
-function agentHermesPath(repoPath: string): string | null {
-  const candidates = [
-    join(repoPath, '.venv', 'bin', 'hermes'),
-    join(repoPath, 'venv', 'bin', 'hermes'),
-  ]
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
-  }
-  return null
-}
-
 export function readAgentUpdateStatus(): ProductUpdateStatus {
   const repoPath = agentRepoPath()
-  const repoHermes = repoPath ? agentHermesPath(repoPath) : null
-  const path = repoHermes ?? exec('which', ['hermes'])
+  const repoHermes = repoPath ? join(repoPath, 'venv', 'bin', 'hermes') : null
+  const path =
+    repoHermes && existsSync(repoHermes) ? repoHermes : exec('which', ['hermes'])
   const version =
     (path ? exec(path, ['--version'], { timeout: 10_000 }) : null)?.split(
       '\n',
@@ -470,32 +458,19 @@ export function readAgentUpdateStatus(): ProductUpdateStatus {
     'outsourc-e/hermes-agent',
     'NousResearch/hermes-agent',
   ])
-  const updateRemote = process.env.HERMES_AGENT_UPDATE_REMOTE || 'origin'
-  const updateBranch = process.env.HERMES_AGENT_UPDATE_BRANCH || null
-  if (repoMatches) {
-    git(['fetch', 'origin', '--quiet'], repoPath, 30_000)
-    if (updateRemote !== 'origin') {
-      git(['fetch', updateRemote, '--quiet'], repoPath, 30_000)
-    }
-  }
+  if (repoMatches) git(['fetch', 'origin', '--quiet'], repoPath, 30_000)
   const currentHead = git(['rev-parse', 'HEAD'], repoPath)
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath)
-  const targetBranch = updateBranch || branch || 'main'
-  const latestHead = repoMatches
-    ? updateRemote === 'origin'
-      ? remoteHead(repoPath, 'origin')
-      : remoteBranchHead(repoPath, updateRemote, targetBranch)
-    : null
-  const remoteRef = repoMatches ? `${updateRemote}/${targetBranch}` : null
+  const latestHead = repoMatches ? remoteHead(repoPath, 'origin') : null
+  const remoteRef = repoMatches ? `origin/${branch || 'main'}` : null
   const dirty = isDirty(repoPath)
+  const divergence = remoteRef ? branchDivergence(repoPath, remoteRef) : null
   const updateAvailable = Boolean(
-    currentHead && latestHead && currentHead !== latestHead && remoteRef,
+    currentHead && latestHead && remoteRef && updateAvailableFromDivergence(divergence, currentHead !== latestHead),
   )
   const canSync = remoteRef ? canResetToRemote(repoPath, remoteRef) : false
   const ff = remoteRef ? canFastForward(repoPath, remoteRef) : false
-  const canUpdate = Boolean(
-    repoMatches && updateAvailable && !dirty && canSync && ff,
-  )
+  const canUpdate = Boolean(repoMatches && updateAvailable && !dirty && canSync)
 
   return {
     id: 'agent',
@@ -513,7 +488,7 @@ export function readAgentUpdateStatus(): ProductUpdateStatus {
       ? 'unsupported'
       : dirty
         ? 'blocked'
-        : updateAvailable && canSync && ff
+        : updateAvailable && canSync
           ? 'available'
           : updateAvailable
             ? 'blocked'
@@ -525,7 +500,7 @@ export function readAgentUpdateStatus(): ProductUpdateStatus {
         : updateAvailable && !canSync
           ? 'Hermes Agent update could not verify the remote branch ref.'
           : updateAvailable && !ff
-            ? `Hermes Agent branch diverged from ${updateRemote}/${targetBranch}. One-click update is blocked until the managed checkout is manually reconciled.`
+            ? 'Hermes Agent branch diverged from origin. One-click update will realign to the remote branch.'
             : null,
     blockingFiles: dirty ? listDirtyFiles(repoPath) : undefined,
     updateMode: 'hermes-update',
@@ -657,16 +632,13 @@ export function applyAgentUpdate(): ApplyUpdateResult {
   }
 
   const output: Array<string> = []
-  const updateRemote = process.env.HERMES_AGENT_UPDATE_REMOTE || 'origin'
-  const targetBranch =
-    process.env.HERMES_AGENT_UPDATE_BRANCH || before.branch || 'main'
   output.push(
-    execOrThrow('git', ['fetch', updateRemote, targetBranch], {
+    execOrThrow('git', ['fetch', 'origin'], {
       cwd: before.repoPath,
       timeout: 60_000,
     }),
   )
-  const remoteRef = `${updateRemote}/${targetBranch}`
+  const remoteRef = `origin/${before.branch || 'main'}`
   if (!canResetToRemote(before.repoPath, remoteRef)) {
     const status = readAgentUpdateStatus()
     return {
