@@ -542,6 +542,7 @@ export function listProfiles(): Array<ProfileSummary> {
       model: defaultModel,
       provider: defaultProvider,
       description: extractDescription(config) || undefined,
+      systemPrompt: extractSystemPrompt(config, root) || undefined,
       skillCount: countFilesRecursive(
         path.join(root, 'skills'),
         (full) => path.basename(full) === 'SKILL.md',
@@ -553,29 +554,6 @@ export function listProfiles(): Array<ProfileSummary> {
       updatedAt: latestMtime([root, path.join(root, 'config.yaml')]),
     })
   }
-  if (!defaultProvider && typeof config.provider === 'string') {
-    defaultProvider = config.provider
-  }
-  results.unshift({
-    name: 'default',
-    path: root,
-    active: activeProfile === 'default',
-    exists: true,
-    model: defaultModel,
-    provider: defaultProvider,
-    description: extractDescription(config) || undefined,
-    systemPrompt: extractSystemPrompt(config, root) || undefined,
-    skillCount: countFilesRecursive(
-      path.join(root, 'skills'),
-      (full) => path.basename(full) === 'SKILL.md',
-    ),
-    sessionCount: countFilesRecursive(path.join(root, 'sessions'), (full) =>
-      /\.(jsonl|json|sqlite|db)$/i.test(full),
-    ),
-    hasEnv: fs.existsSync(path.join(root, '.env')),
-    updatedAt: latestMtime([root, path.join(root, 'config.yaml')]),
-  })
-
   results.sort((a, b) => {
     if (a.active && !b.active) return -1
     if (!a.active && b.active) return 1

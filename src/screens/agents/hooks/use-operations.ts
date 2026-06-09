@@ -243,11 +243,22 @@ async function fetchClaudeProfiles(): Promise<ClaudeProfileSummary[]> {
 
 // Adapt Hermes profiles into the ConfigPayload shape that the existing
 // Operations UI expects. Each profile becomes one agent.
+export function formatProfileDisplayName(profileName: string): string {
+  const normalized = profileName.trim()
+  if (!normalized) return ''
+  if (normalized === 'default') return 'Workspace'
+  return normalized
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
 async function fetchOperationsConfig(): Promise<ConfigPayload> {
   const profiles = await fetchClaudeProfiles()
   const list = profiles.map((profile) => ({
     id: profile.name,
-    name: profile.name === 'default' ? 'Workspace' : profile.name,
+    name: formatProfileDisplayName(profile.name),
     model: profile.model || '',
     workspace: profile.path,
     agentDir: profile.path,
