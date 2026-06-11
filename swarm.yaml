@@ -1,498 +1,135 @@
+# Olympus-native swarm roster — replaces the upstream demo roster (orchestrator/builder/qa/...)
+# whose profiles, GBrain MCP servers, and skills do not exist on this host.
+# Source of truth for each worker: its operating doctrine under
+# /Users/hermes/Olympus/core/messa-brain-v2/docs/operations/*_OPERATING_DOCTRINE_*.md,
+# the god skill matrix (infra/hermes-agent/god_skill_matrix.json), the governed tool
+# registry (infra/hermes-agent/tool_command_registry.json), and god_autonomy_policy.json.
+# Worker ids equal the live profile directories under ~/.hermes/profiles/.
 version: 1
 workers:
-- id: orchestrator
-  name: Orchestrator
-  role: Swarm Orchestrator / Greenlight Gate
-  specialty: mission routing, task decomposition, handoffs, proof contracts, human approval gates
+- id: olympus-hermes
+  name: Hermes (COO)
+  role: COO orchestrator and cross-god accountability
+  specialty: orchestration, operating rhythm, intake, routing, blocker escalation, Zeus decision flow
   model: GPT-5.5
-  mission: Decompose missions into safe, proof-bearing work and route to the right specialist while preserving human greenlight control.
-  profile: orchestrator
-  modes:
-  - plan
-  tools:
-  - todo
-  - kanban
-  - delegation
-  - terminal
-  - file
-  - gbrain
-  - session_search
-  - cronjob
-  - skills
-  - clarify
-  - web
-  skills:
-  - orchestrator-core
-  - gstack-for-hermes
-  - gbrain
-  - kanban-orchestrator
-  - subagent-driven-development
-  - writing-plans
-  - requesting-code-review
-  - workspace-dispatch
-  capabilities:
-  - orchestration
-  - decomposition
-  - routing
-  - proof-contracts
-  - greenlight-gate
-  preferredTaskTypes:
-  - orchestration
-  - planning
-  - routing
-  - coordination
-  - handoff
-  greenlightRequiredFor:
-  - merge
-  - publish
-  - destructive
-  - external-send
-  - credential-change
+  mission: 'Keep the companies moving: every important item has an owner, next action, deadline or cadence, proof requirement, and escalation path. Doctrine: docs/operations/HERMES_OPERATING_DOCTRINE_2026-06-01.md'
+  profile: olympus-hermes
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-browser-evidence, olympus-skill-security-review, olympus-codebase-map, olympus-document-factory, olympus-presentation-factory, athena-visual-design-director, frontend-design, hermes-inbox-operator, hermes-executive-briefing, mission-control-skill-admin]
+  capabilities: [orchestration, routing, intake, escalation, executive-briefing]
+  preferredTaskTypes: [orchestration, routing, intake, follow-up, briefing]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
   maxConcurrentTasks: 1
   acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: orchestrator:plan
-- id: km-agent
-  name: KM Agent
-  role: RAZSOC / GBrain Knowledge Steward
-  specialty: RAZSOC, GBrain, Obsidian, TaskNotes, graph health, durable knowledge capture, drift audits
+- id: athena
+  name: Athena
+  role: Strategic architect and critic
+  specialty: strategy, growth thesis, pressure testing, major opportunity review, council synthesis, strategic dissent
   model: GPT-5.5
-  mission: Keep the operating brain coherent, searchable, and source-of-record aligned without polluting durable knowledge.
-  profile: km-agent
-  modes:
-  - health
-  - curate
-  tools:
-  - gbrain
-  - file
-  - terminal
-  - session_search
-  - skills
-  - todo
-  - cronjob
-  - web
-  skills:
-  - km-agent-core
-  - gbrain
-  - obsidian-markdown
-  - obsidian-cli
-  - obsidian-bases
-  - json-canvas
-  - gstack-for-hermes
-  capabilities:
-  - gbrain
-  - razsoc
-  - obsidian
-  - tasknotes
-  - drift-audit
-  - knowledge-curation
-  preferredTaskTypes:
-  - knowledge
-  - curation
-  - brain-health
-  - drift
-  - documentation
-  greenlightRequiredFor:
-  - delete
-  - purge
-  - bulk-edit
-  - source-of-record-change
+  mission: 'Keep one live, evidence-backed growth thesis across trucking, property, product, and finance, and pressure-test every major commitment before Zeus decides. Doctrine: docs/operations/ATHENA_OPERATING_DOCTRINE_2026-06-09.md'
+  profile: athena
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-browser-evidence, olympus-codebase-map, olympus-document-factory, olympus-presentation-factory, athena-strategic-research, athena-architecture-council, athena-visual-design-director, frontend-design]
+  capabilities: [strategy, research, council-synthesis, pressure-testing]
+  preferredTaskTypes: [strategy, research, review, council]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
   maxConcurrentTasks: 1
   acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: km:health
-- id: builder
-  name: Builder
-  role: Scoped Implementation Agent
-  specialty: focused implementation, tests, small diffs, integration fixes
+- id: atlas
+  name: Atlas
+  role: Reliability and recovery control layer
+  specialty: reliability, recovery, runtime drift, incident triage, dependency health, backup/restore readiness, rollback review
   model: GPT-5.5
-  mission: Ship scoped product/code slices with tests, minimal diffs, and clear verification evidence.
-  profile: builder
-  modes:
-  - task
-  tools:
-  - terminal
-  - file
-  - browser
-  - web
-  - gbrain
-  - session_search
-  - skills
-  - todo
-  skills:
-  - builder-core
-  - gstack-for-hermes
-  - test-driven-development
-  - systematic-debugging
-  - github-pr-workflow
-  - requesting-code-review
-  - codebase-inspection
-  capabilities:
-  - implementation
-  - code-editing
-  - tests
-  - integration
-  - build-verification
-  preferredTaskTypes:
-  - implementation
-  - bugfix
-  - feature
-  - refactor
-  - integration
-  greenlightRequiredFor:
-  - merge
-  - push
-  - destructive
-  - external-write
+  mission: 'Protect Olympus reliability by turning drift, incidents, dependency risk, backup gaps, proof gaps, and repeated failures into containment, verification, recovery, and Prometheus-ready hardening. Doctrine: docs/operations/ATLAS_OPERATING_DOCTRINE_2026-06-02.md'
+  profile: atlas
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-browser-evidence, olympus-skill-security-review, olympus-codebase-map, olympus-document-factory, olympus-presentation-factory, athena-visual-design-director, frontend-design, atlas-incident-readiness, atlas-backup-restore, mission-control-skill-admin]
+  capabilities: [incident-triage, recovery, backup-restore, dependency-health]
+  preferredTaskTypes: [incident, reliability, recovery, verification]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
   maxConcurrentTasks: 1
   acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: builder:task
-- id: reviewer
-  name: Reviewer
-  role: Independent Review / Merge Gate
-  specialty: security review, logic review, regression detection, quality gates
+- id: hephaestus
+  name: Hephaestus
+  role: Shop intelligence and repair verification
+  specialty: shop diagnostics, repair planning, repair verification, fleet uptime, parts/manual research, failed-fix learning, floor assignments
   model: GPT-5.5
-  mission: Independently review changes and block unsafe, untested, or logically broken work before it lands.
-  profile: reviewer
-  modes:
-  - gate
-  tools:
-  - terminal
-  - file
-  - web
-  - gbrain
-  - session_search
-  - skills
-  skills:
-  - reviewer-core
-  - requesting-code-review
-  - github-code-review
-  - systematic-debugging
-  - gstack-for-hermes
-  - gbrain
-  - codebase-inspection
-  capabilities:
-  - code-review
-  - security-review
-  - regression-analysis
-  - quality-gate
-  - merge-readiness
-  preferredTaskTypes:
-  - review
-  - qa
-  - regression
-  - verification
-  - merge-gate
-  greenlightRequiredFor:
-  - approve-merge
-  - external-comment
-  - destructive
-  reviewRequired: false
+  mission: 'Maximize usable fleet capacity and repair quality by turning symptoms, faults, DVIRs, mechanic evidence, parts/manual context, and repair history into prioritized shop action with verified closure. Doctrine: docs/operations/HEPHAESTUS_OPERATING_DOCTRINE_2026-06-02.md'
+  profile: hephaestus
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-browser-evidence, athena-visual-design-director, frontend-design, hephaestus-diagnostics, hephaestus-parts-manual-research, olympus-document-factory]
+  capabilities: [diagnostics, repair-verification, parts-research, fleet-uptime]
+  preferredTaskTypes: [repair, diagnostics, verification, parts-research]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
   maxConcurrentTasks: 1
   acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: reviewer:gate
-- id: qa
-  name: QA
-  role: Browser / Workflow / CLI Smoke Verification
-  specialty: browser QA, workflow smoke tests, expected-vs-actual checks, regression reproduction
+- id: hestia
+  name: Hestia
+  role: Property and work-order agent
+  specialty: 737 S 13th and property operations, tenant pipeline, vendors, leases, work orders, asset continuity, property growth
   model: GPT-5.5
-  mission: Verify user-visible behavior with concrete smoke evidence and concise bug reports.
-  profile: qa
-  modes:
-  - smoke
-  tools:
-  - browser
-  - terminal
-  - file
-  - vision
-  - gbrain
-  - session_search
-  - skills
-  - web
-  skills:
-  - qa-core
-  - browser-harness-power-use
-  - dogfood
-  - gstack-for-hermes
-  capabilities:
-  - browser-qa
-  - smoke-verification
-  - regression-reproduction
-  - cli-verification
-  - evidence-capture
-  preferredTaskTypes:
-  - qa
-  - smoke
-  - browser
-  - verification
-  - regression
-  greenlightRequiredFor:
-  - destructive
-  - external-write
+  mission: 'Keep the property producing - occupancy, working systems, current leases, and a visible work-order pipeline - with every claim backed by source or provider proof and every spend stopped at the approval line. Doctrine: docs/operations/HESTIA_OPERATING_DOCTRINE_2026-06-09.md'
+  profile: hestia
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-browser-evidence, athena-visual-design-director, frontend-design, hestia-work-order-vendor, hestia-asset-continuity]
+  capabilities: [property-operations, work-orders, vendor-management, tenant-pipeline]
+  preferredTaskTypes: [property, work-order, vendor, lease]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
   maxConcurrentTasks: 1
   acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: qa:smoke
-- id: researcher
-  name: Researcher
-  role: Brain-first Research / Bounded Autoresearch
-  specialty: GBrain-first lookup, external research, synthesis, source trails, bounded research loops
+- id: mercury
+  name: Mercury
+  role: Isolated market-intelligence and trading-research
+  specialty: freight/fuel/macro signals, watchlists, research notes, paper-traded strategy research inside a no-live-capital boundary
   model: GPT-5.5
-  mission: Produce decision-grade research with brain-first context, external verification, and explicit uncertainty.
-  profile: researcher
-  modes:
-  - quick
-  - autoresearch
-  tools:
-  - gbrain
-  - web
-  - browser
-  - terminal
-  - file
-  - vision
-  - session_search
-  - skills
-  - todo
-  skills:
-  - researcher-core
-  - gbrain
-  - autoresearch
-  - browser-harness-power-use
-  - gstack-for-hermes
-  - researcher-quick
-  - researcher-autoresearch
-  - arxiv
-  - youtube-content
-  - polymarket
-  capabilities:
-  - research
-  - synthesis
-  - source-verification
-  - gbrain-query
-  - autoresearch
-  preferredTaskTypes:
-  - research
-  - analysis
-  - options
-  - source-review
-  - market-map
-  greenlightRequiredFor:
-  - publish
-  - external-send
-  - long-running-loop
+  mission: 'Produce decision-useful market intelligence for the operating businesses and build a paper-traded, receipt-backed strategy capability - without ever touching live capital, shared credentials, or shared business state. Doctrine: docs/operations/MERCURY_OPERATING_DOCTRINE_2026-06-09.md'
+  profile: mercury
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-browser-evidence, athena-visual-design-director, frontend-design, mercury-isolated-research, mercury-trading-platform]
+  capabilities: [market-signals, watchlists, isolated-research, paper-trading]
+  preferredTaskTypes: [research, market-signal, watchlist, thesis]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
+  maxConcurrentTasks: 1
+  acceptsBroadcast: false
+- id: plutus
+  name: Plutus
+  role: Finance and profitability agent
+  specialty: cash, AR, margin, billing leakage, profitability scoring, capital allocation recommendations, finance-safe approvals
+  model: GPT-5.5
+  mission: 'Make cash position, margin, and receivable risk visible and evidence-backed every day, and catch billing leakage before it ages into loss - without ever moving money autonomously. Doctrine: docs/operations/PLUTUS_OPERATING_DOCTRINE_2026-06-09.md'
+  profile: plutus
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-browser-evidence, athena-visual-design-director, frontend-design, plutus-finance-reconciliation, plutus-cash-collections]
+  capabilities: [cash-visibility, receivables, margin-analysis, billing-leakage]
+  preferredTaskTypes: [finance, reconciliation, receivables, profitability]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
   maxConcurrentTasks: 1
   acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: researcher:quick
-- id: ops-watch
-  name: Ops Watch
-  role: Local Infra / Runtime Health Watch
-  specialty: gateway health, cron, MCP, workspace services, local process status, boring reliability
+- id: prometheus
+  name: Prometheus
+  role: Improvement and primary coding lane
+  specialty: system improvement, automation leverage, productization, release intelligence, approved coding/change-authoring, rollout packs
   model: GPT-5.5
-  mission: Keep Hermes, Workspace, GBrain, gateway, cron, and local services observable and healthy with quiet, low-risk checks.
-  profile: ops-watch
-  modes:
-  - health
-  tools:
-  - terminal
-  - cronjob
-  - file
-  - gbrain
-  - skills
-  - session_search
-  - web
-  skills:
-  - ops-watch-core
-  - gbrain
-  - hermes-agent
-  - systematic-debugging
-  - webhook-subscriptions
-  capabilities:
-  - ops-health
-  - gateway-status
-  - runtime-monitoring
-  - cron
-  - mcp-health
-  - lifecycle-sweep
-  preferredTaskTypes:
-  - ops
-  - health
-  - monitoring
-  - lifecycle
-  - incident-triage
-  greenlightRequiredFor:
-  - restart-service
-  - destructive
-  - config-change
-  - credential-change
+  mission: 'Turn recurring pain, drift, weak observability, stale source truth, dependency signals, and approved requirements into bounded, tested, reversible system improvements. Doctrine: docs/operations/PROMETHEUS_OPERATING_DOCTRINE_2026-06-02.md'
+  profile: prometheus
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-skill-security-review, olympus-browser-evidence, olympus-codebase-map, olympus-document-factory, olympus-presentation-factory, hermes-inbox-operator, hermes-executive-briefing, athena-strategic-research, athena-architecture-council, athena-visual-design-director, frontend-design, atlas-incident-readiness, atlas-backup-restore, prometheus-improvement-rollout, prometheus-engineering-delivery, hephaestus-diagnostics, hephaestus-parts-manual-research, plutus-finance-reconciliation, plutus-cash-collections, themis-compliance-evidence, themis-policy-exception, hestia-work-order-vendor, hestia-asset-continuity, mercury-isolated-research, mercury-trading-platform, mission-control-skill-admin]
+  capabilities: [improvement-rollout, coding, automation, release-intelligence]
+  preferredTaskTypes: [improvement, coding, automation, rollout]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
   maxConcurrentTasks: 1
   acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: ops:health
-- id: maintainer
-  name: Maintainer
-  role: Upstream Dependency / Patch Hygiene
-  specialty: upstream tracking, local patch hygiene, dependency updates, PR/issue follow-through
+- id: themis
+  name: Themis
+  role: Compliance and obligations control layer
+  specialty: compliance evidence, obligations, deadlines, contracts, filings, inspections, driver/DQ posture, policy exceptions, escalation packets
   model: GPT-5.5
-  mission: Keep local forks and upstream dependencies healthy without losing local patches or dirty-worktree context.
-  profile: maintainer
-  modes:
-  - check
-  tools:
-  - terminal
-  - file
-  - web
-  - browser
-  - gbrain
-  - session_search
-  - skills
-  skills:
-  - maintainer-core
-  - github-repo-management
-  - github-pr-workflow
-  - github-issues
-  - github-code-review
-  - gbrain
-  - gstack-for-hermes
-  - hermes-agent
-  capabilities:
-  - upstream-tracking
-  - dependency-maintenance
-  - patch-hygiene
-  - git-review
-  - issue-tracking
-  preferredTaskTypes:
-  - maintenance
-  - upstream
-  - dependency
-  - patch
-  - release-notes
-  greenlightRequiredFor:
-  - merge
-  - push
-  - destructive
-  - fork-reset
+  mission: 'Keep Olympus compliance obligations visible, evidence-backed, deadline-aware, exception-bounded, and ready for human or legal review without pretending that Themis makes final legal decisions. Doctrine: docs/operations/THEMIS_OPERATING_DOCTRINE_2026-06-03.md'
+  profile: themis
+  tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
+  skills: [olympus-live-truth, olympus-pantheon-delegation, olympus-memory-continuity, olympus-skill-harvesting, olympus-browser-evidence, olympus-skill-security-review, olympus-codebase-map, athena-visual-design-director, frontend-design, themis-compliance-evidence, themis-policy-exception]
+  capabilities: [compliance-evidence, obligations, deadlines, policy-exceptions]
+  preferredTaskTypes: [compliance, obligation, filing, evidence]
+  greenlightRequiredFor: [money-movement, credentials-oauth, quickbooks-production, external-commitments, legal-hr-safety, destructive-irreversible, evidence-backup-deletion, p0-priority]
   maxConcurrentTasks: 1
   acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: maintainer:check
-- id: strategist
-  name: Strategist
-  role: Wedges / Bets / Kill Criteria
-  specialty: operating plans, gstack-style wedges, strategy reviews, decision framing, kill criteria
-  model: GPT-5.5
-  mission: Turn ambiguity into crisp wedges, bets, constraints, and kill criteria without over-planning.
-  profile: strategist
-  modes:
-  - review
-  tools:
-  - gbrain
-  - web
-  - session_search
-  - file
-  - skills
-  - todo
-  - clarify
-  skills:
-  - strategist-core
-  - gstack-for-hermes
-  - gbrain
-  - writing-plans
-  - polymarket
-  capabilities:
-  - strategy
-  - planning
-  - ideation
-  - decision-framing
-  - kill-criteria
-  preferredTaskTypes:
-  - strategy
-  - planning
-  - review
-  - ideation
-  - prioritization
-  greenlightRequiredFor:
-  - publish
-  - external-send
-  - irreversible-decision
-  maxConcurrentTasks: 1
-  acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: strategist:review
-- id: inbox-triage
-  name: Inbox Triage
-  role: Capture / Discard / Route / Task Triage
-  specialty: low-friction inbox processing, capture routing, task/research/defer decisions, durable-context filtering
-  model: GPT-5.5
-  mission: Route incoming material into discard, task, research, or durable brain capture with minimal overhead and no junk accumulation.
-  profile: inbox-triage
-  modes:
-  - triage
-  tools:
-  - gbrain
-  - web
-  - file
-  - session_search
-  - todo
-  - skills
-  - terminal
-  skills:
-  - inbox-triage-core
-  - gbrain
-  - obsidian-markdown
-  - gstack-for-hermes
-  - defuddle
-  - youtube-content
-  capabilities:
-  - inbox-triage
-  - capture-routing
-  - task-routing
-  - knowledge-filtering
-  - source-review
-  preferredTaskTypes:
-  - triage
-  - inbox
-  - capture
-  - task-routing
-  - reading-queue
-  greenlightRequiredFor:
-  - delete
-  - purge
-  - publish
-  - external-send
-  maxConcurrentTasks: 1
-  acceptsBroadcast: true
-  plugins: []
-  pluginToolsets: []
-  mcpServers:
-  - gbrain
-  wrapper: inbox:triage
