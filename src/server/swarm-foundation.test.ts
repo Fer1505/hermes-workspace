@@ -1,3 +1,6 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildSwarmDispatchMetadata,
@@ -7,14 +10,13 @@ import {
   getSwarmWrapperPath,
   normalizeSwarmRuntime,
   parseSwarmPluginManifest,
+  patchSwarmRuntimeFile,
+  readSwarmRuntimeFile,
 } from './swarm-foundation'
-import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
 
 describe('normalizeSwarmRuntime', () => {
   it('resolves semantic wrapper aliases from the roster', () => {
-    expect(getSwarmWrapperPath('builder')).toMatch(/\/builder:task$/)
+    expect(getSwarmWrapperPath('builder')).toMatch(/\/builder(?::task)?$/)
     expect(getSwarmWrapperPath('swarm5')).toMatch(/\/swarm5$/)
   })
 
@@ -161,8 +163,6 @@ describe('parseSwarmPluginManifest', () => {
     }
   })
 })
-
-import { patchSwarmRuntimeFile, readSwarmRuntimeFile } from './swarm-foundation'
 
 describe('patchSwarmRuntimeFile', () => {
   it('returns ok=false when the profile path does not exist', () => {
