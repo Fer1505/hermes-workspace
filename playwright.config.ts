@@ -2,6 +2,7 @@ import { defineConfig } from 'playwright/test'
 
 const port = Number(process.env.E2E_PORT || 3102)
 const baseURL = `http://127.0.0.1:${port}`
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
 
 export default defineConfig({
   testDir: './e2e',
@@ -12,6 +13,7 @@ export default defineConfig({
   use: {
     baseURL,
     browserName: 'chromium',
+    launchOptions: executablePath ? { executablePath } : undefined,
     serviceWorkers: 'block',
     trace: 'retain-on-failure',
   },

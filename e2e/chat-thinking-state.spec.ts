@@ -23,7 +23,15 @@ test.describe('Chat thinking state #449', () => {
       )
     }, sessionKey)
 
-    await installApiStubs(page)
+    await installApiStubs(page, {
+      sessions: [
+        {
+          key: sessionKey,
+          friendlyId: sessionKey,
+          updatedAt: Date.now(),
+        },
+      ],
+    })
 
     await page.goto(sessionPath)
     await page.waitForLoadState('networkidle')
