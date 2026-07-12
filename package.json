@@ -15,6 +15,7 @@
     "start:dev": "NODE_OPTIONS=\"--max-old-space-size=2048\" vite dev",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "test:audit": "vitest run src/server/swarm-foundation.test.ts src/routes/api/-swarm-kanban.test.ts electron/external-url-policy.test.ts",
     "smoke:managed": "node scripts/managed-companion-smoke.mjs",
     "playground:ws": "node scripts/playground-ws.mjs",

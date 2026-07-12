@@ -1,23 +1,32 @@
-import { test, expect } from 'playwright/test'
-
-const BASE = process.env.HERMES_WORKSPACE_URL || 'http://localhost:3002'
+import { expect, test } from 'playwright/test'
+import { installApiStubs } from './api-stubs'
 
 test.describe('Conductor mobile rendering', () => {
   test.use({
     viewport: { width: 375, height: 667 }, // iPhone SE
   })
 
-  test('conductor home page renders without clipping on mobile', async ({ page }) => {
-    await page.goto(`${BASE}/conductor`)
-    await page.waitForTimeout(2000)
+  test.beforeEach(async ({ page }) => {
+    await installApiStubs(page)
+  })
+
+  test('conductor home page renders without clipping on mobile', async ({
+    page,
+  }) => {
+    await page.goto('/conductor')
+    await page.waitForLoadState('networkidle')
 
     // Check that the main container is present
     const main = page.locator('main')
     await expect(main.first()).toBeVisible()
 
     // Verify the page is scrollable — bottom content should be reachable
-    const scrollHeight = await page.evaluate(() => document.documentElement.scrollHeight)
-    const clientHeight = await page.evaluate(() => document.documentElement.clientHeight)
+    const scrollHeight = await page.evaluate(
+      () => document.documentElement.scrollHeight,
+    )
+    const clientHeight = await page.evaluate(
+      () => document.documentElement.clientHeight,
+    )
     expect(scrollHeight).toBeGreaterThanOrEqual(clientHeight)
 
     // Check that the Conductor badge or title is visible
@@ -25,8 +34,9 @@ test.describe('Conductor mobile rendering', () => {
     expect(pageText).toContain('Conductor')
 
     // Scroll to the very bottom
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-    await page.waitForTimeout(500)
+    await page.evaluate(() =>
+      window.scrollTo(0, document.documentElement.scrollHeight),
+    )
 
     // Verify no content is cut off — the last visible element should not be flush
     // with the bottom of the viewport
@@ -39,20 +49,25 @@ test.describe('Conductor mobile rendering', () => {
     expect(bottomElement).toBeGreaterThan(0)
   })
 
-  test('conductor page has no horizontal overflow on mobile', async ({ page }) => {
-    await page.goto(`${BASE}/conductor`)
-    await page.waitForTimeout(2000)
+  test('conductor page has no horizontal overflow on mobile', async ({
+    page,
+  }) => {
+    await page.goto('/conductor')
+    await page.waitForLoadState('networkidle')
 
     // Check for horizontal overflow
     const hasHorizontalOverflow = await page.evaluate(() => {
-      return document.documentElement.scrollWidth > document.documentElement.clientWidth
+      return (
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth
+      )
     })
     expect(hasHorizontalOverflow).toBe(false)
   })
 
   test('conductor action buttons are present on mobile', async ({ page }) => {
-    await page.goto(`${BASE}/conductor`)
-    await page.waitForTimeout(2000)
+    await page.goto('/conductor')
+    await page.waitForLoadState('networkidle')
 
     // Check for action buttons — they should be visible and clickable
     const buttons = page.locator('button')
@@ -60,9 +75,11 @@ test.describe('Conductor mobile rendering', () => {
     expect(buttonCount).toBeGreaterThan(0)
   })
 
-  test('conductor main container has proper bottom padding on mobile', async ({ page }) => {
-    await page.goto(`${BASE}/conductor`)
-    await page.waitForTimeout(2000)
+  test('conductor main container has proper bottom padding on mobile', async ({
+    page,
+  }) => {
+    await page.goto('/conductor')
+    await page.waitForLoadState('networkidle')
 
     // Check the bottom padding of main elements
     const bottomPadding = await page.evaluate(() => {
@@ -76,9 +93,11 @@ test.describe('Conductor mobile rendering', () => {
     expect(bottomPadding).toBeGreaterThanOrEqual(4)
   })
 
-  test('conductor page body fills full viewport height without clipping at bottom', async ({ page }) => {
-    await page.goto(`${BASE}/conductor`)
-    await page.waitForTimeout(2000)
+  test('conductor page body fills full viewport height without clipping at bottom', async ({
+    page,
+  }) => {
+    await page.goto('/conductor')
+    await page.waitForLoadState('networkidle')
 
     // Verify body fills the viewport and can scroll
     const bodyHeight = await page.evaluate(() => document.body.scrollHeight)
@@ -87,12 +106,10 @@ test.describe('Conductor mobile rendering', () => {
 
     // Scroll to bottom — should not error
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    await page.waitForTimeout(300)
 
     // The last visible element on the page should have bottom >= 0
     const lastElBottom = await page.evaluate(() => {
-      const all = document.querySelectorAll('main > div, main > section')
-      const last = all[all.length - 1]
+      const last = document.querySelector('main > :last-child')
       if (!last) return -1
       const rect = last.getBoundingClientRect()
       return rect.bottom
