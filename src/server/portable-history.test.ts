@@ -22,6 +22,18 @@ describe('portable history replay', () => {
     ).toEqual([])
   })
 
+  it('replays history for Hermes gateway requests without bearer-backed continuity', () => {
+    expect(shouldReplayPortableHistory()).toBe(true)
+
+    expect(
+      selectPortableConversationHistory(
+        [{ role: 'assistant', content: 'old reply' }],
+        [{ role: 'user', content: 'fallback' }],
+        { bearerToken: '' },
+      ),
+    ).toEqual([{ role: 'assistant', content: 'old reply' }])
+  })
+
   it('replays persisted history for direct local-provider requests', () => {
     expect(
       selectPortableConversationHistory(

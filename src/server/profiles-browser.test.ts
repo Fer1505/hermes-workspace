@@ -17,6 +17,8 @@ describe('listProfiles', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    delete process.env.HERMES_HOME
+    delete process.env.CLAUDE_HOME
     fs.rmSync(tempHome, { recursive: true, force: true })
   })
 
@@ -25,6 +27,7 @@ describe('listProfiles', () => {
     const profilesRoot = path.join(hermesRoot, 'profiles')
     const namedProfileRoot = path.join(profilesRoot, 'jarvis')
 
+    process.env.HERMES_HOME = hermesRoot
     fs.mkdirSync(namedProfileRoot, { recursive: true })
     fs.writeFileSync(path.join(hermesRoot, 'active_profile'), 'jarvis\n', 'utf-8')
     fs.writeFileSync(
@@ -54,6 +57,7 @@ describe('listProfiles', () => {
     const defaultDirRoot = path.join(hermesRoot, 'profiles', 'default')
     const namedProfileRoot = path.join(hermesRoot, 'profiles', 'builder')
 
+    process.env.HERMES_HOME = hermesRoot
     fs.mkdirSync(defaultDirRoot, { recursive: true })
     fs.mkdirSync(namedProfileRoot, { recursive: true })
     fs.writeFileSync(
@@ -76,6 +80,38 @@ describe('listProfiles', () => {
     expect(defaultProfiles[0]?.provider).toBe('openai')
     expect(defaultProfiles[0]?.description).toBe('Root default')
     expect(profiles.find((profile) => profile.name === 'builder')?.provider).toBe('anthropic')
+  })
+
+  it('lists sibling Olympus profiles when HERMES_HOME points at the active profile directory', () => {
+    const profilesRoot = path.join(tempHome, 'Olympus', 'runtime', 'hermes-agent', 'profiles')
+    const activeProfileRoot = path.join(profilesRoot, 'olympus-hermes')
+    const athenaProfileRoot = path.join(profilesRoot, 'athena')
+
+    process.env.HERMES_HOME = activeProfileRoot
+    fs.mkdirSync(activeProfileRoot, { recursive: true })
+    fs.mkdirSync(athenaProfileRoot, { recursive: true })
+    fs.writeFileSync(
+      path.join(activeProfileRoot, 'config.yaml'),
+      'model:\n  default: gpt-5.5\n  provider: openai-codex\nagent:\n  system_prompt: Hermes owns live operations and current system truth. Stay inside this agent boundary.\n',
+      'utf-8',
+    )
+    fs.writeFileSync(
+      path.join(athenaProfileRoot, 'config.yaml'),
+      'model:\n  default: gpt-5.5\n  provider: openai-codex\nagent:\n  system_prompt: Athena owns strategy and architecture council. Stay inside this agent boundary.\n',
+      'utf-8',
+    )
+
+    const profiles = listProfiles()
+    const names = profiles.map((profile) => profile.name)
+
+    expect(names).toContain('athena')
+    expect(names).toContain('olympus-hermes')
+    expect(names).not.toContain('default')
+    expect(profiles.find((profile) => profile.name === 'olympus-hermes')?.active).toBe(true)
+    expect(profiles.find((profile) => profile.name === 'athena')?.description).toBe(
+      'Athena owns strategy and architecture council.',
+    )
+    expect(readProfile('default').path).toBe(activeProfileRoot)
   })
 
   it('reads and updates profile descriptions from config.yaml', () => {

@@ -31,7 +31,7 @@ const QUERY_KEY = ['claude', 'tasks'] as const
 const ASSIGNEES_KEY = ['claude', 'tasks', 'assignees'] as const
 
 export const TASKS_BOARD_HELP_TEXT =
-  'Workspace Tasks is a lightweight task board. Drag cards to change status. Use Dashboard Kanban for native multi-board controls.'
+  'Workspace Tasks is a lightweight task board. Drag Kanban cards to change status. When Kanban is empty, scheduled Olympus agent work appears as read-only cards.'
 
 function SkeletonCard() {
   return (
@@ -140,6 +140,11 @@ export function TasksScreen() {
   })
 
   function handleDragStart(e: React.DragEvent, taskId: string) {
+    const task = tasks.find(t => t.id === taskId)
+    if (task?.readonly) {
+      e.preventDefault()
+      return
+    }
     e.dataTransfer.setData('text/plain', taskId)
     setDraggingId(taskId)
   }
@@ -153,7 +158,7 @@ export function TasksScreen() {
     e.preventDefault()
     const taskId = e.dataTransfer.getData('text/plain')
     const task = tasks.find(t => t.id === taskId)
-    if (!task || task.column === targetColumn) {
+    if (!task || task.readonly || task.column === targetColumn) {
       setDraggingId(null)
       setDragOverColumn(null)
       return
@@ -354,7 +359,10 @@ export function TasksScreen() {
                             assigneeLabels={assigneeLabels}
                             isDragging={draggingId === task.id}
                             onDragStart={e => handleDragStart(e, task.id)}
-                            onClick={() => setEditingTask(task)}
+                            onClick={() => {
+                              if (task.readonly) return
+                              setEditingTask(task)
+                            }}
                           />
                         </motion.div>
                       ))

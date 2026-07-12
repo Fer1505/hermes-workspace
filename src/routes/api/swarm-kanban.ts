@@ -1,7 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { z } from 'zod'
+import { isAuthenticated } from '../../server/auth-middleware'
 import { createKanbanCard, getKanbanBackendMeta, listKanbanCards, updateKanbanCard } from '../../server/kanban-backend'
+import { requireJsonContentType } from '../../server/rate-limit'
 
 const AcceptanceCriteriaSchema = z.preprocess(
   (value) => {
@@ -50,10 +52,24 @@ const UpdateCardSchema = CreateCardSchema.partial().extend({
   id: z.string().trim().min(1),
 })
 
+function requireAuthenticated(request: Request): Response | null {
+  if (isAuthenticated(request)) return null
+  return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+}
+
+function requireMutationRequest(request: Request): Response | null {
+  const authError = requireAuthenticated(request)
+  if (authError) return authError
+  return requireJsonContentType(request)
+}
+
 export const Route = createFileRoute('/api/swarm-kanban')({
   server: {
     handlers: {
-      GET: async () => {
+      GET: async ({ request }) => {
+        const authError = requireAuthenticated(request)
+        if (authError) return authError
+
         return json({
           ok: true,
           cards: await listKanbanCards(),
@@ -61,6 +77,9 @@ export const Route = createFileRoute('/api/swarm-kanban')({
         })
       },
       POST: async ({ request }) => {
+        const requestError = requireMutationRequest(request)
+        if (requestError) return requestError
+
         let body: unknown
         try {
           body = await request.json()
@@ -89,6 +108,9 @@ export const Route = createFileRoute('/api/swarm-kanban')({
         return json({ ok: true, card, backend: getKanbanBackendMeta() })
       },
       PATCH: async ({ request }) => {
+        const requestError = requireMutationRequest(request)
+        if (requestError) return requestError
+
         let body: unknown
         try {
           body = await request.json()

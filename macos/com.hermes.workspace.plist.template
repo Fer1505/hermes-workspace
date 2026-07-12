@@ -25,6 +25,10 @@
       <string>{{HERMES_API_URL}}</string>
       <key>CLAUDE_API_URL</key>
       <string>{{HERMES_API_URL}}</string>
+      <key>HERMES_DASHBOARD_URL</key>
+      <string>{{HERMES_DASHBOARD_URL}}</string>
+      <key>CLAUDE_DASHBOARD_URL</key>
+      <string>{{HERMES_DASHBOARD_URL}}</string>
       <key>HERMES_API_TOKEN</key>
       <string>{{HERMES_API_TOKEN}}</string>
       <key>CLAUDE_API_TOKEN</key>

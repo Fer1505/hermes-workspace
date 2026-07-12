@@ -3,7 +3,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight01Icon,
   Clock01Icon,
-  PauseIcon,
   PlayIcon,
   Settings01Icon,
 } from '@hugeicons/core-free-icons'
@@ -177,10 +176,8 @@ export function OperationsAgentCard({
   const status = getStatusStyles(agent.status)
   const displayName = stripEmojiPrefix(agent.name)
   const [showCronPanel, setShowCronPanel] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
   const { messages, sendMessage, isSending, error } = useAgentChat(agent.sessionKey)
   const cronJobCount = agent.jobs.length
-  const isActive = agent.status === 'active' && !isPaused
 
   const toggleMutation = useMutation({
     mutationFn: async (payload: { jobId: string; enabled: boolean }) =>
@@ -212,13 +209,7 @@ export function OperationsAgentCard({
     },
   })
 
-  async function handlePlayPause() {
-    if (isActive) {
-      setIsPaused(true)
-      return
-    }
-
-    setIsPaused(false)
+  async function handleRunNow() {
     await sendMessage('Run your primary task now')
   }
 
@@ -250,18 +241,18 @@ export function OperationsAgentCard({
 
         <div className="flex w-full justify-center px-20">
           <h3 className="min-w-0 text-center text-sm font-semibold text-[var(--theme-text)]">
-          <span className="inline-flex max-w-full items-center justify-center gap-2">
-            <span className="truncate">{displayName}</span>
-            <span
-              className={cn(
-                'h-2 w-2 shrink-0 rounded-full',
-                agent.status === 'active' && !isPaused && 'animate-pulse',
-                status.dot,
-              )}
-              aria-label={status.label}
-              title={status.label}
-            />
-          </span>
+            <span className="inline-flex max-w-full items-center justify-center gap-2">
+              <span className="truncate">{displayName}</span>
+              <span
+                className={cn(
+                  'h-2 w-2 shrink-0 rounded-full',
+                  agent.status === 'active' && 'animate-pulse',
+                  status.dot,
+                )}
+                aria-label={status.label}
+                title={status.label}
+              />
+            </span>
           </h3>
         </div>
 
@@ -271,16 +262,16 @@ export function OperationsAgentCard({
             aria-label={
               agent.needsSetup
                 ? `Configure ${displayName} before running`
-                : isActive ? `Pause ${displayName}` : `Run ${displayName} now`
+                : `Run ${displayName} now`
             }
             onClick={() => {
               if (agent.needsSetup) {
                 onOpenSettings(agent.id)
                 return
               }
-              void handlePlayPause()
+              void handleRunNow()
             }}
-            disabled={(isSending && !isActive)}
+            disabled={isSending}
             title={
               agent.needsSetup
                 ? 'No model configured — open settings to set one up'
@@ -294,7 +285,7 @@ export function OperationsAgentCard({
             )}
           >
             <HugeiconsIcon
-              icon={isActive ? PauseIcon : PlayIcon}
+              icon={PlayIcon}
               size={16}
               strokeWidth={1.8}
             />

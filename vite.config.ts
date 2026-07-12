@@ -270,6 +270,7 @@ function resolveClaudeAgentDir(env: Record<string, string>): string | null {
   candidates.push(
     resolve(workspaceRoot, 'hermes-agent'), // sibling (old README)
     resolve(workspaceRoot, '..', 'hermes-agent'), // one level up
+    resolve(os.homedir(), '.hermes', 'hermes-agent'), // Nous installer default
     resolve(os.homedir(), '.claude', 'hermes-agent'), // Nous installer default
     resolve(os.homedir(), 'hermes-agent'), // ~/hermes-agent
   )
@@ -281,9 +282,26 @@ function resolveClaudeAgentDir(env: Record<string, string>): string | null {
 }
 
 /** Find the Hermes CLI binary used to start the local gateway. */
+function resolveCommandPath(command: string): string | null {
+  try {
+    const resolved = execSync(`command -v ${command}`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    return resolved || null
+  } catch {
+    return null
+  }
+}
+
 function resolveClaudeBinary(): string | null {
   const candidates = [
     process.env.HERMES_CLI_BIN || '',
+    resolveCommandPath('hermes') || '',
+    resolve(os.homedir(), '.hermes', 'bin', 'hermes'),
+    resolve(os.homedir(), '.local', 'bin', 'hermes'),
+    process.env.CLAUDE_CLI_BIN || '',
+    resolveCommandPath('claude') || '',
     resolve(os.homedir(), '.hermes', 'hermes-agent', 'venv', 'bin', 'hermes'),
     resolve(os.homedir(), '.claude', 'bin', 'claude'),
     resolve(os.homedir(), '.local', 'bin', 'claude'),
@@ -292,6 +310,39 @@ function resolveClaudeBinary(): string | null {
     if (existsSync(c)) return c
   }
   return null
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const trimmed = value?.trim()
+    if (trimmed) return trimmed
+  }
+  return ''
+}
+
+function isEnabled(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes'
+}
+
+function resolveGatewayBindHost(env: Record<string, string>): string {
+  return (
+    firstNonEmpty(
+      env.API_SERVER_HOST,
+      process.env.API_SERVER_HOST,
+      env.HERMES_GATEWAY_BIND_HOST,
+      process.env.HERMES_GATEWAY_BIND_HOST,
+    ) || '127.0.0.1'
+  )
+}
+
+function parseAllowedHosts(value: string | undefined): string[] {
+  return value?.trim()
+    ? value
+        .split(',')
+        .map((host) => host.trim())
+        .filter(Boolean)
+    : []
 }
 
 /** Resolve the Python executable to use for Hermes backend startup.
@@ -329,7 +380,10 @@ const config = defineConfig(({ mode, command }) => {
       process.env[key] = env[key]
     }
   }
-  const claudeApiUrl = env.CLAUDE_API_URL?.trim() || 'http://127.0.0.1:8642'
+  const claudeApiUrl =
+    env.HERMES_API_URL?.trim() ||
+    env.CLAUDE_API_URL?.trim() ||
+    'http://127.0.0.1:8642'
   // /api/connection-status is handled by the real route file at
   // src/routes/api/connection-status.ts; the dev server no longer
   // intercepts that path with a slim shortcut. See #285.
@@ -340,9 +394,15 @@ const config = defineConfig(({ mode, command }) => {
 
   const startClaudeAgent = async () => {
     if (claudeAgentStarted) return
-    // Skip auto-start when CLAUDE_API_URL is explicitly set to a non-local endpoint
+    // Skip auto-start when HERMES_API_URL/CLAUDE_API_URL points at an
+    // external backend.
     const explicitUrl =
-      env.CLAUDE_API_URL || process.env.CLAUDE_API_URL || claudeApiUrl || ''
+      env.HERMES_API_URL ||
+      process.env.HERMES_API_URL ||
+      env.CLAUDE_API_URL ||
+      process.env.CLAUDE_API_URL ||
+      claudeApiUrl ||
+      ''
     if (
       explicitUrl &&
       explicitUrl !== 'http://127.0.0.1:8642' &&
@@ -362,6 +422,7 @@ const config = defineConfig(({ mode, command }) => {
 
     const claudeBin = resolveClaudeBinary()
     const agentDir = resolveClaudeAgentDir(env)
+    const gatewayBindHost = resolveGatewayBindHost(env)
 
     // Prefer the `hermes gateway run` binary path (Nous installer's canonical
     // entrypoint). Fall back to launching uvicorn against the source tree if
@@ -385,7 +446,7 @@ const config = defineConfig(({ mode, command }) => {
             'uvicorn',
             'webapi.app:app',
             '--host',
-            '0.0.0.0',
+            gatewayBindHost,
             '--port',
             '8642',
           ]
@@ -409,8 +470,10 @@ const config = defineConfig(({ mode, command }) => {
       stdio: 'pipe',
       env: {
         ...process.env,
+        API_SERVER_HOST: gatewayBindHost,
         PATH: [
           resolve(os.homedir(), '.claude', 'bin'),
+          resolve(os.homedir(), '.hermes', 'bin'),
           resolve(os.homedir(), '.local', 'bin'),
           agentDir ? resolve(agentDir, '.venv', 'bin') : '',
           agentDir ? resolve(agentDir, 'venv', 'bin') : '',
@@ -591,15 +654,44 @@ const config = defineConfig(({ mode, command }) => {
     }
   }
 
-  // Allow access from Tailscale, LAN, or custom domains via env var
-  // e.g. CLAUDE_ALLOWED_HOSTS=my-server.tail1234.ts.net,192.168.1.50
-  const configuredAllowedHosts = env.CLAUDE_ALLOWED_HOSTS?.trim()
-  const allowedHosts: Array<string> = configuredAllowedHosts
-    ? configuredAllowedHosts
-        .split(',')
-        .map((h) => h.trim())
-        .filter(Boolean)
-    : ['.ts.net'] // allow all Tailscale hostnames by default
+  const devServerHost =
+    firstNonEmpty(
+      env.HERMES_DEV_SERVER_HOST,
+      process.env.HERMES_DEV_SERVER_HOST,
+      env.HOST,
+      process.env.HOST,
+    ) || '127.0.0.1'
+  const allowAnyDevHost = isEnabled(
+    env.HERMES_DEV_ALLOW_ANY_HOST || process.env.HERMES_DEV_ALLOW_ANY_HOST,
+  )
+  // Default to Vite's safe host checks. Remote/Tailscale/LAN dev access must
+  // opt in with HERMES_ALLOWED_HOSTS/CLAUDE_ALLOWED_HOSTS, or the explicit
+  // HERMES_DEV_ALLOW_ANY_HOST=1 escape hatch for trusted throwaway sessions.
+  const allowedHostsValue = firstNonEmpty(
+    env.HERMES_ALLOWED_HOSTS,
+    process.env.HERMES_ALLOWED_HOSTS,
+    env.CLAUDE_ALLOWED_HOSTS,
+    process.env.CLAUDE_ALLOWED_HOSTS,
+  )
+  const allowedHosts: Array<string> | true = allowAnyDevHost
+    ? true
+    : parseAllowedHosts(allowedHostsValue)
+  if (allowAnyDevHost) {
+    console.warn(
+      '[workspace] HERMES_DEV_ALLOW_ANY_HOST=1 disables Vite host checks. Use only on trusted networks.',
+    )
+  }
+  let proxyTarget = 'http://127.0.0.1:18789'
+
+  try {
+    const parsed = new URL(claudeApiUrl)
+    parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:'
+    parsed.pathname = ''
+    proxyTarget = parsed.toString().replace(/\/$/, '')
+  } catch {
+    // fallback
+  }
+
   return {
     // Vite's implicit public-directory handling copied every file verbatim and
     // served it ahead of application routing. The containment plugin below is
@@ -671,12 +763,15 @@ const config = defineConfig(({ mode, command }) => {
         'Cross-Origin-Embedder-Policy': 'credentialless',
       },
       // Force IPv4 — 'localhost' resolves to ::1 (IPv6) on Windows, breaking connectivity
-      host: '0.0.0.0',
+      // Olympus posture: loopback by default. Remote/LAN/Tailscale dev serving
+      // is an explicit opt-in via HOST or HERMES_DEV_SERVER_HOST; never bind
+      // 0.0.0.0 by default on the production Mac.
+      host: devServerHost,
       // Port precedence:
       //   1. --port CLI flag (wins, but we no longer hardcode it in package.json)
       //   2. $PORT env var (for containers, reverse proxies, WhatsApp bridge collisions, etc. — see #96)
       //   3. default 3000 (matches README/docs/docker-compose expectations)
-      port: process.env.PORT ? Number(process.env.PORT) : 3000,
+      port: Number(env.PORT || process.env.PORT || 3000),
       // Managed Workspace launchers expect a stable port. Fail loudly instead
       // of silently hopping to 3001+ so launchctl/service health matches the
       // actual listening socket.
@@ -923,12 +1018,32 @@ const config = defineConfig(({ mode, command }) => {
           // Replace specific env vars first, then the generic fallback
           let result = code
           result = result.replace(
+            /process\.env\.HERMES_API_URL/g,
+            JSON.stringify(claudeApiUrl),
+          )
+          result = result.replace(
             /process\.env\.CLAUDE_API_URL/g,
             JSON.stringify(claudeApiUrl),
           )
           result = result.replace(
+            /process\.env\.HERMES_DASHBOARD_URL/g,
+            JSON.stringify(
+              env.HERMES_DASHBOARD_URL || env.CLAUDE_DASHBOARD_URL || '',
+            ),
+          )
+          result = result.replace(
+            /process\.env\.CLAUDE_DASHBOARD_URL/g,
+            JSON.stringify(
+              env.HERMES_DASHBOARD_URL || env.CLAUDE_DASHBOARD_URL || '',
+            ),
+          )
+          result = result.replace(
+            /process\.env\.HERMES_API_TOKEN/g,
+            JSON.stringify(env.HERMES_API_TOKEN || env.CLAUDE_API_TOKEN || ''),
+          )
+          result = result.replace(
             /process\.env\.CLAUDE_API_TOKEN/g,
-            JSON.stringify(env.CLAUDE_API_TOKEN || ''),
+            JSON.stringify(env.HERMES_API_TOKEN || env.CLAUDE_API_TOKEN || ''),
           )
           result = result.replace(
             /process\.env\.NODE_ENV/g,

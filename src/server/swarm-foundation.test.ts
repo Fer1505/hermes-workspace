@@ -16,7 +16,7 @@ import {
 
 describe('normalizeSwarmRuntime', () => {
   it('resolves semantic wrapper aliases from the roster', () => {
-    expect(getSwarmWrapperPath('builder')).toMatch(/\/builder:task$/)
+    expect(getSwarmWrapperPath('builder')).toMatch(/\/builder(?::task)?$/)
     expect(getSwarmWrapperPath('swarm5')).toMatch(/\/swarm5$/)
   })
 

@@ -1,6 +1,6 @@
-import { cn } from '@/lib/utils'
 import type { ClaudeTask } from '@/lib/tasks-api'
 import { PRIORITY_COLORS, isOverdue } from '@/lib/tasks-api'
+import { cn } from '@/lib/utils'
 
 type Props = {
   task: ClaudeTask
@@ -24,16 +24,18 @@ export function TaskCard({ task, assigneeLabels = {}, onClick, onDragStart, isDr
   const visibleTags = task.tags.slice(0, 2)
   const extraTagCount = task.tags.length - 2
   const assigneeLabel = formatTaskAssigneeLabel(task.assignee, assigneeLabels)
+  const readOnly = task.readonly === true
 
   return (
     <div
-      draggable
+      draggable={!readOnly}
       onDragStart={onDragStart}
       onClick={onClick}
       className={cn(
-        'relative rounded-lg border p-3 cursor-pointer transition-all select-none',
+        'relative rounded-lg border p-3 transition-all select-none',
+        readOnly ? 'cursor-default' : 'cursor-pointer',
         'bg-[var(--theme-card)] border-[var(--theme-border)]',
-        'hover:border-[var(--theme-accent)]',
+        !readOnly && 'hover:border-[var(--theme-accent)]',
         isDragging ? 'opacity-40 rotate-1 shadow-2xl' : 'hover:shadow-[0_4px_16px_rgba(0,0,0,0.35)]',
       )}
       style={{ borderLeftWidth: 3, borderLeftColor: priorityColor }}
@@ -73,6 +75,11 @@ export function TaskCard({ task, assigneeLabels = {}, onClick, onDragStart, isDr
               +{extraTagCount} more
             </span>
           )}
+          {readOnly && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--theme-hover)] text-[var(--theme-muted)]">
+              Read-only
+            </span>
+          )}
         </div>
 
         {task.due_date && (
@@ -86,7 +93,7 @@ export function TaskCard({ task, assigneeLabels = {}, onClick, onDragStart, isDr
             )}
             <span className={overdue ? 'text-red-400 font-semibold' : 'text-[var(--theme-muted)]'}>
               {(() => {
-                const [y, m, d] = task.due_date!.split('-').map(Number)
+                const [y, m, d] = task.due_date.split('-').map(Number)
                 return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               })()}
             </span>

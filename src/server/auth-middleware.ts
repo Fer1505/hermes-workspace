@@ -165,7 +165,7 @@ function isTrustedProxyEnabled(): boolean {
  * TRUST_PROXY is set — otherwise a client-controlled `x-forwarded-for`
  * could spoof local classification (#125).
  */
-export function getRequestIp(request: Request): string {
+export function getRequestIp(request: Request): string | null {
   if (isTrustedProxyEnabled()) {
     const forwarded = request.headers.get('x-forwarded-for')
     const first = forwarded?.split(',')[0]?.trim()
@@ -175,21 +175,17 @@ export function getRequestIp(request: Request): string {
   }
   // Node's Request does not expose the socket; the adapter that constructs it
   // (TanStack Start / undici) may attach `remoteAddress` under a well-known
-  // symbol. Fall back to loopback when nothing is available so we fail *safe*
-  // (no LAN/Tailscale bypass for unknown peers).
+  // symbol. Unknown peers fail closed for local-or-auth routes.
   const maybeAddress = (request as unknown as { remoteAddress?: string })
     .remoteAddress
-  return (maybeAddress && maybeAddress.trim()) || '127.0.0.1'
+  return (maybeAddress && maybeAddress.trim()) || null
 }
 
 function isLocalRequest(request: Request): boolean {
   const ip = getRequestIp(request)
+  if (!ip) return false
   const localIPs = ['127.0.0.1', '::1', 'localhost', '::ffff:127.0.0.1']
   if (localIPs.includes(ip)) return true
-  // Allow Tailscale (100.x.x.x) and private LAN ranges
-  if (/^100\.\d+\.\d+\.\d+$/.test(ip)) return true
-  if (/^192\.168\./.test(ip)) return true
-  if (/^10\./.test(ip)) return true
   return false
 }
 
@@ -234,7 +230,8 @@ export function requireLocalOrAuth(request: Request): boolean {
 function shouldSetSecureCookie(): boolean {
   const override = (process.env.COOKIE_SECURE || '').trim().toLowerCase()
   if (override === '1' || override === 'true' || override === 'yes') return true
-  if (override === '0' || override === 'false' || override === 'no') return false
+  if (override === '0' || override === 'false' || override === 'no')
+    return false
   return process.env.NODE_ENV === 'production'
 }
 

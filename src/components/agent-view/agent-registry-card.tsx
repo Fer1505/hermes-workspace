@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { KillConfirmDialog } from './kill-confirm-dialog'
 import { SteerModal } from './steer-modal'
+import { supportsArbitrarySessionControls } from '@/lib/gateway-api'
 
 export type AgentRegistryStatus = 'active' | 'idle' | 'available' | 'paused'
 
@@ -91,6 +92,7 @@ export function AgentRegistryCard({
 
   const hasSession = Boolean(agent.sessionKey)
   const isPaused = agent.status === 'paused'
+  const canUseArbitrarySessionControls = supportsArbitrarySessionControls()
 
   function showSpawnFirstNotice() {
     setNotice('Spawn agent first')
@@ -159,66 +161,68 @@ export function AgentRegistryCard({
             </p>
           </div>
 
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setMenuOpen((open) => !open)}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/60 text-neutral-700 shadow-sm border border-white/30 dark:bg-neutral-900/30 dark:text-neutral-100 dark:border-white/10"
-              aria-label={`${agent.name} controls`}
-              aria-expanded={menuOpen}
-            >
-              ⋯
-            </button>
+          {canUseArbitrarySessionControls ? (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setMenuOpen((open) => !open)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/60 text-neutral-700 shadow-sm border border-white/30 dark:bg-neutral-900/30 dark:text-neutral-100 dark:border-white/10"
+                aria-label={`${agent.name} controls`}
+                aria-expanded={menuOpen}
+              >
+                ⋯
+              </button>
 
-            {menuOpen ? (
-              <>
-                <button
-                  type="button"
-                  aria-label="Close controls"
-                  className="fixed inset-0 z-40"
-                  onClick={() => setMenuOpen(false)}
-                />
-                <div className="absolute right-3 top-10 z-50 w-44 rounded-xl bg-white/90 dark:bg-neutral-900/90 backdrop-blur border border-white/30 dark:border-white/10 shadow-lg p-1">
+              {menuOpen ? (
+                <>
                   <button
                     type="button"
-                    onClick={() => {
-                      setMenuOpen(false)
-                      handleSteerIntent()
-                    }}
-                    className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs font-medium text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                  >
-                    Steer
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handlePauseToggle()
-                    }}
-                    disabled={pausePending}
-                    className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs font-medium text-neutral-700 hover:bg-neutral-100 disabled:opacity-60 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                  >
-                    {pausePending
-                      ? isPaused
-                        ? 'Resuming...'
-                        : 'Pausing...'
-                      : isPaused
-                        ? 'Resume'
-                        : 'Pause'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false)
-                      handleKillIntent()
-                    }}
-                    className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
-                  >
-                    Kill
-                  </button>
-                </div>
-              </>
-            ) : null}
-          </div>
+                    aria-label="Close controls"
+                    className="fixed inset-0 z-40"
+                    onClick={() => setMenuOpen(false)}
+                  />
+                  <div className="absolute right-3 top-10 z-50 w-44 rounded-xl bg-white/90 dark:bg-neutral-900/90 backdrop-blur border border-white/30 dark:border-white/10 shadow-lg p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        handleSteerIntent()
+                      }}
+                      className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs font-medium text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    >
+                      Steer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handlePauseToggle()
+                      }}
+                      disabled={pausePending}
+                      className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs font-medium text-neutral-700 hover:bg-neutral-100 disabled:opacity-60 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    >
+                      {pausePending
+                        ? isPaused
+                          ? 'Resuming...'
+                          : 'Pausing...'
+                        : isPaused
+                          ? 'Resume'
+                          : 'Pause'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        handleKillIntent()
+                      }}
+                      className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
+                    >
+                      Kill
+                    </button>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {notice ? (
@@ -227,7 +231,13 @@ export function AgentRegistryCard({
           </p>
         ) : null}
 
-        <div className="grid grid-cols-4 gap-2 mt-3">
+        <div
+          className={
+            canUseArbitrarySessionControls
+              ? 'grid grid-cols-4 gap-2 mt-3'
+              : 'grid grid-cols-3 gap-2 mt-3'
+          }
+        >
           <button
             type="button"
             onClick={() => {
@@ -237,13 +247,15 @@ export function AgentRegistryCard({
           >
             Chat
           </button>
-          <button
-            type="button"
-            onClick={handleSteerIntent}
-            className="rounded-xl bg-white/60 dark:bg-neutral-900/30 backdrop-blur px-2 py-2 text-[11px] font-medium text-neutral-800 dark:text-neutral-100 shadow-sm border border-white/30 dark:border-white/10 active:scale-[0.97] transition"
-          >
-            Steer
-          </button>
+          {canUseArbitrarySessionControls ? (
+            <button
+              type="button"
+              onClick={handleSteerIntent}
+              className="rounded-xl bg-white/60 dark:bg-neutral-900/30 backdrop-blur px-2 py-2 text-[11px] font-medium text-neutral-800 dark:text-neutral-100 shadow-sm border border-white/30 dark:border-white/10 active:scale-[0.97] transition"
+            >
+              Steer
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => onHistory(agent)}

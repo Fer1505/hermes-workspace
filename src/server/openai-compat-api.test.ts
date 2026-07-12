@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { openaiChat, parseOpenAIStream } from './openai-compat-api'
 
-function createStreamResponse(chunks: string[]): Response {
+function createStreamResponse(chunks: Array<string>): Response {
   const encoder = new TextEncoder()
   return new Response(
     new ReadableStream({
@@ -34,12 +34,14 @@ afterEach(() => {
 describe('openaiChat', () => {
   it('sends Hermes session continuity headers with authentication when available', async () => {
     process.env.HERMES_API_TOKEN = 'test-token'
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ),
-    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
     vi.stubGlobal('fetch', fetchMock)
 
     await openaiChat([{ role: 'user', content: 'hello' }], {
@@ -47,20 +49,25 @@ describe('openaiChat', () => {
       sessionId: 'workspace-session-1',
     })
 
-    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<
+      string,
+      string
+    >
     expect(headers.Authorization).toBe('Bearer test-token')
     expect(headers['X-Hermes-Session-Id']).toBe('workspace-session-1')
     expect(headers['X-Claude-Session-Id']).toBe('workspace-session-1')
   })
 
-  it('sends Hermes session continuity headers even without a bearer token', async () => {
+  it('does not send Hermes session continuity headers without a bearer token', async () => {
     process.env.HOME = '/tmp/hermes-workspace-test-no-codex-auth'
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ),
-    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
     vi.stubGlobal('fetch', fetchMock)
 
     await openaiChat([{ role: 'user', content: 'hello' }], {
@@ -68,10 +75,43 @@ describe('openaiChat', () => {
       sessionId: 'workspace-session-2',
     })
 
-    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<
+      string,
+      string
+    >
     expect(headers.Authorization).toBeUndefined()
-    expect(headers['X-Hermes-Session-Id']).toBe('workspace-session-2')
-    expect(headers['X-Claude-Session-Id']).toBe('workspace-session-2')
+    expect(headers['X-Hermes-Session-Id']).toBeUndefined()
+    expect(headers['X-Claude-Session-Id']).toBeUndefined()
+  })
+
+  it('does not forward Hermes auth headers to explicit local provider base URLs', async () => {
+    process.env.HERMES_API_TOKEN = 'test-token'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await openaiChat([{ role: 'user', content: 'hello' }], {
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      model: 'local-provider',
+      sessionId: 'workspace-session-3',
+    })
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:11434/v1/chat/completions',
+    )
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<
+      string,
+      string
+    >
+    expect(headers.Authorization).toBeUndefined()
+    expect(headers['X-Hermes-Session-Id']).toBeUndefined()
+    expect(headers['X-Claude-Session-Id']).toBeUndefined()
   })
 })
 

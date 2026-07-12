@@ -18,6 +18,9 @@ set -euo pipefail
 REPO_URL="${REPO_URL:-https://github.com/outsourc-e/hermes-workspace.git}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/hermes-workspace}"
 GATEWAY_PORT="${GATEWAY_PORT:-8642}"
+DASHBOARD_PORT="${DASHBOARD_PORT:-9119}"
+USER_SET_WORKSPACE_PORT="${WORKSPACE_PORT:-${PORT:-}}"
+WORKSPACE_PORT="${WORKSPACE_PORT:-${PORT:-3000}}"
 NOUS_INSTALLER_URL="${NOUS_INSTALLER_URL:-https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh}"
 
 # ─── helpers ──────────────────────────────────────────────────────────────
@@ -29,6 +32,25 @@ red()    { printf "\033[31m%s\033[0m\n" "$*"; }
 bold()   { printf "\033[1m%s\033[0m\n" "$*"; }
 
 need() { command -v "$1" &>/dev/null || { red "Missing: $1"; red "$2"; exit 1; }; }
+
+port_in_use() {
+  local port="$1"
+  if command -v lsof &>/dev/null; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN &>/dev/null && return 0
+  fi
+  if command -v ss &>/dev/null; then
+    ss -tln 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}$" && return 0
+  fi
+  return 1
+}
+
+next_free_port() {
+  local port="$1"
+  while port_in_use "$port"; do
+    port=$((port + 1))
+  done
+  printf '%s\n' "$port"
+}
 
 banner() {
   cat <<'EOF'
@@ -101,6 +123,12 @@ ensure_env_key() {
 
 banner
 cyan "→ Checking prerequisites…"
+
+if [[ -z "$USER_SET_WORKSPACE_PORT" ]] && port_in_use "$WORKSPACE_PORT"; then
+  WORKSPACE_PORT="$(next_free_port 3100)"
+  yellow "  Port 3000 is already in use — using Workspace port $WORKSPACE_PORT."
+  yellow "  Set WORKSPACE_PORT=... before running the installer to choose another port."
+fi
 
 need node "Install Node 22+: https://nodejs.org/"
 node_major=$(node -v | sed -E 's/v([0-9]+).*/\1/')
@@ -182,7 +210,11 @@ cyan "→ Configuring .env…"
 if [[ ! -f .env ]]; then
   cp .env.example .env
 fi
-ensure_env_key "$INSTALL_DIR/.env" "HERMES_API_URL" "http://127.0.0.1:${GATEWAY_PORT}"
+HERMES_API_GATEWAY="${HERMES_API_URL:-http://127.0.0.1:${GATEWAY_PORT}}"
+HERMES_DASHBOARD_ENDPOINT="${HERMES_DASHBOARD_URL:-http://127.0.0.1:${DASHBOARD_PORT}}"
+ensure_env_key "$INSTALL_DIR/.env" "PORT" "$WORKSPACE_PORT"
+ensure_env_key "$INSTALL_DIR/.env" "HERMES_API_URL" "$HERMES_API_GATEWAY"
+ensure_env_key "$INSTALL_DIR/.env" "HERMES_DASHBOARD_URL" "$HERMES_DASHBOARD_ENDPOINT"
 green "  .env ready ✓"
 
 cyan "→ Enabling Hermes API server…"
@@ -246,8 +278,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   mkdir -p "$HOME/Library/LaunchAgents"
 
   NODE_BIN="$(command -v node)"
-  HERMES_PORT="${PORT:-3000}"
-  HERMES_API_GATEWAY="http://127.0.0.1:${GATEWAY_PORT}"
+  HERMES_PORT="$WORKSPACE_PORT"
   TOKEN=""
 
   if [[ -f "$HOME/.hermes/.env" ]]; then
@@ -262,6 +293,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     -e "s|{{INSTALL_DIR}}|${INSTALL_DIR}|g" \
     -e "s|{{PORT}}|${HERMES_PORT}|g" \
     -e "s|{{HERMES_API_URL}}|${HERMES_API_GATEWAY}|g" \
+    -e "s|{{HERMES_DASHBOARD_URL}}|${HERMES_DASHBOARD_ENDPOINT}|g" \
     -e "s|{{HERMES_API_TOKEN}}|${TOKEN}|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
 
@@ -282,19 +314,23 @@ green "  Install complete!"
 bold "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cat <<EOF
 
-Next steps (two terminals):
+Next steps (three terminals):
 
   1) Start the Hermes Agent gateway:
        hermes gateway run
      (first run may prompt for hermes setup)
 
-  2) Start the workspace UI:
-       cd $INSTALL_DIR && pnpm dev
+  2) Start the Hermes Agent dashboard:
+       hermes dashboard
 
-  3) Open http://localhost:3000
+  3) Start the workspace UI:
+       cd $INSTALL_DIR && PORT=$WORKSPACE_PORT pnpm dev
+
+  4) Open http://localhost:$WORKSPACE_PORT
 
 If the gateway was already running before this install,
-restart it so API_SERVER_ENABLED=true takes effect.
+restart it so API_SERVER_ENABLED=true takes effect. If the dashboard
+was already running, refresh the workspace after it reprobes.
 
 EOF
 

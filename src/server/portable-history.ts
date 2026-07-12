@@ -16,7 +16,7 @@ export function shouldReplayPortableHistory(options?: {
   // stable X-Hermes-Session-Id / X-Claude-Session-Id for server-side session
   // continuity. Replaying the full transcript on every turn would duplicate
   // prompt context and can explode token usage.
-  return false
+  return !options?.bearerToken?.trim()
 }
 
 export function selectPortableConversationHistory(

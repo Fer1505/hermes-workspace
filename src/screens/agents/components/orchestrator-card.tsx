@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { Cancel01Icon, Settings01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { AgentProgress } from '@/components/agent-view/agent-progress'
@@ -14,16 +14,31 @@ const ORCHESTRATOR_NAME_KEY = 'operations:orchestrator:name'
 const DEFAULT_ORCHESTRATOR_NAME = 'Main Agent'
 
 export function OrchestratorCard({
+  defaultName = DEFAULT_ORCHESTRATOR_NAME,
   totalAgents,
 }: {
+  defaultName?: string
   totalAgents: number
 }) {
+  const resolvedDefaultName = defaultName.trim() || DEFAULT_ORCHESTRATOR_NAME
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [orchestratorName, setOrchestratorName] = useState(() => {
-    if (typeof window === 'undefined') return DEFAULT_ORCHESTRATOR_NAME
-    return window.localStorage.getItem(ORCHESTRATOR_NAME_KEY) || DEFAULT_ORCHESTRATOR_NAME
-  })
-  const [draftName, setDraftName] = useState(orchestratorName)
+  const [orchestratorName, setOrchestratorName] = useState(DEFAULT_ORCHESTRATOR_NAME)
+  const [draftName, setDraftName] = useState(DEFAULT_ORCHESTRATOR_NAME)
+
+  useEffect(() => {
+    const storedName = window.localStorage.getItem(ORCHESTRATOR_NAME_KEY)
+    const nextName =
+      storedName && storedName !== DEFAULT_ORCHESTRATOR_NAME
+        ? storedName
+        : resolvedDefaultName
+
+    if (!storedName || storedName === DEFAULT_ORCHESTRATOR_NAME) {
+      window.localStorage.setItem(ORCHESTRATOR_NAME_KEY, nextName)
+    }
+
+    setOrchestratorName(nextName)
+    setDraftName(nextName)
+  }, [resolvedDefaultName])
 
   const openSettings = () => {
     setDraftName(orchestratorName)
@@ -31,7 +46,7 @@ export function OrchestratorCard({
   }
 
   const saveSettings = () => {
-    const nextName = draftName.trim() || DEFAULT_ORCHESTRATOR_NAME
+    const nextName = draftName.trim() || resolvedDefaultName
     window.localStorage.setItem(ORCHESTRATOR_NAME_KEY, nextName)
     setOrchestratorName(nextName)
     setDraftName(nextName)

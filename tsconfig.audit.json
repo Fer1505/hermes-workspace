@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "electron/external-url-policy.test.ts",
+    "src/server/swarm-foundation.test.ts",
+    "src/server/swarm-foundation.ts",
+    "src/server/swarm-roster.ts"
+  ]
+}

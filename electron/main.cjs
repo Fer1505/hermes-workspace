@@ -4,6 +4,7 @@ const fs = require('fs')
 const { existsSync } = fs
 const { spawn, execSync } = require('child_process')
 const http = require('http')
+const { isAllowedExternalUrl } = require('./external-url-policy.cjs')
 let autoUpdater = null
 try {
   ;({ autoUpdater } = require('electron-updater'))
@@ -370,7 +371,7 @@ async function createWindow() {
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http')) shell.openExternal(url)
+    if (isAllowedExternalUrl(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
 

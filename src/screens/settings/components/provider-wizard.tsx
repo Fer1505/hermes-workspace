@@ -253,10 +253,7 @@ export function ProviderWizard({
 
     const providerName = selectedProvider.name
     const providerId = selectedProvider.id
-    const patchBody = JSON.stringify({
-      raw: JSON.stringify(patch, null, 2),
-      reason: `Studio: add ${providerName} API key`,
-    })
+    const patchBody = JSON.stringify({ config: patch })
 
     async function saveConfigAndRestart() {
       const res = await fetch('/api/config-patch', {
@@ -615,8 +612,8 @@ export function ProviderWizard({
                   <>
                     <p className="mt-1 text-sm text-primary-600 text-pretty">
                       If you have Claude Code or the Hermes CLI installed,
-                      Hermes Agent can use the same auth token. Run the configure
-                      command to detect and import it automatically.
+                      Hermes Agent can use the same auth token. Run the
+                      configure command to detect and import it automatically.
                     </p>
 
                     <div className="mt-4 flex flex-col gap-3">
@@ -723,7 +720,8 @@ export function ProviderWizard({
                             strokeWidth={1.5}
                             className="inline mr-1"
                           />
-                          Key saved! Hermes Agent is restarting to apply changes.
+                          Key saved! Hermes Agent is restarting to apply
+                          changes.
                         </p>
                       ) : null}
                     </div>
@@ -856,7 +854,8 @@ export function ProviderWizard({
                     {verifyTitle}
                   </p>
                   <p className="mt-1 text-sm text-primary-600 text-pretty">
-                    {verificationMessage || 'Waiting for Hermes Agent to respond…'}
+                    {verificationMessage ||
+                      'Waiting for Hermes Agent to respond…'}
                   </p>
                 </div>
 
