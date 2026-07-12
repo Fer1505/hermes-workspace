@@ -1703,36 +1703,6 @@ export function useConductorGateway() {
     setMissionHistory([])
   }
 
-  const pauseAgent = useMutation({
-    mutationFn: async ({ sessionKey, pause }: { sessionKey: string; pause: boolean }) => {
-      const response = await fetch('/api/agent-pause', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionKey: sessionKey.trim(), pause }),
-      })
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => '')
-        throw new Error(text || `Pause request failed (${response.status})`)
-      }
-
-      const now = Date.now()
-      if (pause) {
-        setPausedElapsedMs(getMissionElapsedMs(now))
-        setPauseStartedAt(new Date(now).toISOString())
-        setIsPaused(true)
-        return
-      }
-
-      const pauseStartedMs = pauseStartedAt ? new Date(pauseStartedAt).getTime() : NaN
-      const additionalPausedMs = Number.isFinite(pauseStartedMs) ? Math.max(0, now - pauseStartedMs) : 0
-      setAccumulatedPausedMs((current) => current + additionalPausedMs)
-      setPauseStartedAt(null)
-      setIsPaused(false)
-      setPausedElapsedMs(0)
-    },
-  })
-
   const stopMission = async () => {
     portableStreamAbortRef.current?.abort()
     portableStreamAbortRef.current = null
@@ -1797,9 +1767,7 @@ export function useConductorGateway() {
     conductorSettings,
     setConductorSettings,
     sendMission: (nextGoal: string) => sendMission.mutateAsync({ nextGoal, settings: conductorSettings }),
-    pauseAgent: (sessionKey: string, pause: boolean) => pauseAgent.mutateAsync({ sessionKey, pause }),
     isSending: sendMission.isPending,
-    isPausing: pauseAgent.isPending,
     resetMission,
     resetSavedState,
     stopMission,

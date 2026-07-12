@@ -76,7 +76,7 @@ type ChatComposerAttachment = {
   kind?: 'image' | 'file' | 'audio'
 }
 
-type ThinkingLevel = 'off' | 'low' | 'medium' | 'high'
+type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'adaptive'
 
 type ChatComposerProps = {
   onSubmit: (
@@ -120,6 +120,7 @@ function nextThinkingLevel(level: ThinkingLevel): ThinkingLevel {
   if (level === 'off') return 'low'
   if (level === 'low') return 'medium'
   if (level === 'medium') return 'high'
+  if (level === 'high') return 'adaptive'
   return 'off'
 }
 
@@ -848,7 +849,8 @@ function thinkingLabel(level: ThinkingLevel): string {
   if (level === 'off') return 'None'
   if (level === 'low') return 'Low'
   if (level === 'medium') return 'Medium'
-  return 'High'
+  if (level === 'high') return 'High'
+  return 'Adaptive'
 }
 
 function profileMeta(profile: ProfileSummary): string {
@@ -3167,6 +3169,7 @@ function ChatComposerComponent({
                                     ['low', 'Low'],
                                     ['medium', 'Medium'],
                                     ['high', 'High'],
+                                    ['adaptive', 'Adaptive'],
                                   ] as Array<[ThinkingLevel, string]>
                                 ).map(([level, label]) => (
                                   <button

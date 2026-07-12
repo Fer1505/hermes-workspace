@@ -2195,26 +2195,6 @@ export function Conductor() {
               >
                 <span>■</span> Stop Mission
               </button>
-              {conductor.canPauseMission ? (
-                <button
-                  type="button"
-                  disabled={!conductor.orchestratorSessionKey || conductor.isPausing}
-                  onClick={async () => {
-                    if (!conductor.orchestratorSessionKey) return
-                    await conductor.pauseAgent(conductor.orchestratorSessionKey, !conductor.isPaused)
-                  }}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                    !conductor.orchestratorSessionKey || conductor.isPausing
-                      ? 'cursor-not-allowed border-[var(--theme-border)] bg-[var(--theme-card2)] text-[var(--theme-muted)] opacity-50'
-                      : conductor.isPaused
-                        ? 'border-[var(--theme-accent)] bg-[var(--theme-accent-soft)] text-[var(--theme-accent-strong)] hover:bg-[var(--theme-accent-soft-strong)]'
-                        : 'border-[var(--theme-border)] bg-[var(--theme-card2)] text-[var(--theme-muted)] hover:border-[var(--theme-accent)] hover:text-[var(--theme-text)]',
-                  )}
-                >
-                  <span>{conductor.isPaused ? '▶' : '⏸'}</span> {conductor.isPausing ? '...' : conductor.isPaused ? 'Resume' : 'Pause'}
-                </button>
-              ) : null}
             </div>
           </section>
           {conductor.timeoutWarning && (

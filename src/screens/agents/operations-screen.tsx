@@ -75,7 +75,6 @@ export function OperationsScreen() {
     null
   const settingsAgent = agents.find((agent) => agent.id === settingsAgentId) ?? null
   const orchestratorAgent =
-    agents.find((agent) => agent.profileName === 'olympus-hermes') ??
     agents.find((agent) => agent.id === 'olympus-hermes') ??
     agents[0] ??
     null
