@@ -532,11 +532,13 @@ export function buildDisplayEntries(
     }
 
     if (message.role === 'tool' || message.role === 'toolResult') {
+      if (pendingAssistantToolMessages.length > 0) {
+        pendingAssistantToolMessages.push(message)
+        return
+      }
       const previousEntry = entries[entries.length - 1]
       if (previousEntry?.message.role === 'assistant') {
         previousEntry.attachedToolMessages.push(message)
-      } else if (pendingAssistantToolMessages.length > 0) {
-        pendingAssistantToolMessages.push(message)
       }
       return
     }
@@ -555,14 +557,61 @@ export function buildDisplayEntries(
     entries.push(entry)
   })
 
-  if (pendingAssistantToolMessages.length > 0) {
-    const previousEntry = entries[entries.length - 1]
-    if (previousEntry?.message.role === 'assistant') {
-      previousEntry.attachedToolMessages.push(...pendingAssistantToolMessages)
+  return entries
+}
+
+export type TrailingToolOnlyTurnSummary = {
+  count: number
+  toolNames: Array<string>
+  hasFinalAssistantText: boolean
+}
+
+/**
+ * Describe a persisted turn that ends in tool activity without a final
+ * assistant text response. These events must not be attached to the previous
+ * answer, because doing so makes an unfinished turn look complete.
+ */
+export function getTrailingToolOnlyTurnSummary(
+  messages: Array<ChatMessage>,
+): TrailingToolOnlyTurnSummary | null {
+  let tailStart = messages.length
+
+  while (tailStart > 0) {
+    const message = messages[tailStart - 1]
+    if (
+      isAssistantToolCallOnlyMessage(message) ||
+      message.role === 'tool' ||
+      message.role === 'toolResult'
+    ) {
+      tailStart -= 1
+      continue
+    }
+    break
+  }
+
+  if (tailStart === messages.length) return null
+
+  const toolNames = new Set<string>()
+  for (const message of messages.slice(tailStart)) {
+    for (const toolCall of getToolCallsFromMessage(message)) {
+      if (typeof toolCall.name === 'string' && toolCall.name.trim()) {
+        toolNames.add(toolCall.name.trim())
+      }
+    }
+    const toolName = (message as ChatMessage & { toolName?: unknown }).toolName
+    if (typeof toolName === 'string' && toolName.trim()) {
+      toolNames.add(toolName.trim())
     }
   }
 
-  return entries
+  return {
+    count: messages.length - tailStart,
+    toolNames: [...toolNames].sort(),
+    hasFinalAssistantText: messages.slice(0, tailStart).some(
+      (message) =>
+        message.role === 'assistant' && textFromMessage(message).trim().length > 0,
+    ),
+  }
 }
 
 function escapeAttributeSelector(value: string): string {
@@ -834,6 +883,10 @@ function ChatMessageListComponent({
 
   const displayEntries = useMemo<Array<DisplayEntry>>(
     () => buildDisplayEntries(displayMessages),
+    [displayMessages],
+  )
+  const trailingToolOnlyTurnSummary = useMemo(
+    () => getTrailingToolOnlyTurnSummary(displayMessages),
     [displayMessages],
   )
 
@@ -1785,6 +1838,19 @@ function ChatMessageListComponent({
                     {expandAllToolSections ? '✓ Expanded' : 'Show All'}
                   </button>
                 </div>
+              </div>
+            ) : null}
+            {trailingToolOnlyTurnSummary ? (
+              <div
+                role="status"
+                className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+              >
+                The agent turn ended after {trailingToolOnlyTurnSummary.count}{' '}
+                tool event{trailingToolOnlyTurnSummary.count === 1 ? '' : 's'}
+                {' '}without a final text response.
+                {trailingToolOnlyTurnSummary.toolNames.length > 0
+                  ? ` Tools: ${trailingToolOnlyTurnSummary.toolNames.join(', ')}.`
+                  : ''}
               </div>
             ) : null}
             {loading && displayEntries.length === 0 ? (

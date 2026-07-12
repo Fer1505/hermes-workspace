@@ -5,6 +5,8 @@ import {
   buildWorkerPrompt,
   checkpointFromRuntimeSnapshot,
   dispatchBlockReason,
+  dispatchContainmentReason,
+  dispatchSwarmAssignments,
   runtimeCheckpointSignature,
   runtimeSnapshotIsFresh,
 } from './swarm-dispatch'
@@ -105,7 +107,7 @@ describe('checkpoint filtering', () => {
 })
 
 describe('buildHermesTmuxLaunchCommand', () => {
-  it('keeps the tmux shell alive so startup failures leave readable output', () => {
+  it('replaces the tmux shell with Hermes so prompts cannot reach a fallback shell', () => {
     const command = buildHermesTmuxLaunchCommand({
       profilePath: '/tmp/hermes profiles/swarm1',
       hermesBin: '/opt/homebrew/bin/hermes',
@@ -113,9 +115,9 @@ describe('buildHermesTmuxLaunchCommand', () => {
     })
 
     expect(command).toContain("HERMES_HOME='/tmp/hermes profiles/swarm1'")
-    expect(command).toContain("'/opt/homebrew/bin/hermes' chat --tui")
-    expect(command).toContain('[Hermes worker exited with status %s]')
-    expect(command).not.toContain('exec ')
+    expect(command).toContain("exec '/opt/homebrew/bin/hermes' chat --tui")
+    expect(command).not.toContain('Hermes worker exited')
+    expect(command).not.toContain('; status=')
   })
 })
 
@@ -127,9 +129,86 @@ describe('buildHermesChatQueryArgs', () => {
     expect(args.slice(0, 3)).toEqual(['chat', '-q', prompt])
     expect(args).toContain('-Q')
     expect(args).toContain('--source')
+    expect(args).not.toContain('--yolo')
+    expect(args).not.toContain('--ignore-rules')
     expect(args[1]).toBe('-q')
     expect(args[2]).toBe(prompt)
     expect(args[3]).toBe('-Q')
+  })
+})
+
+describe('Phase 0 dispatch containment', () => {
+  it('classifies unsafe dispatch shapes explicitly', () => {
+    expect(dispatchContainmentReason({
+      assignmentCount: 2,
+      hasDependencies: false,
+      reviewRequired: false,
+      asyncRequested: false,
+    })).toMatch(/exactly one assignment/i)
+    expect(dispatchContainmentReason({
+      assignmentCount: 1,
+      hasDependencies: true,
+      reviewRequired: false,
+      asyncRequested: false,
+    })).toMatch(/dependency-driven/i)
+    expect(dispatchContainmentReason({
+      assignmentCount: 1,
+      hasDependencies: false,
+      reviewRequired: true,
+      asyncRequested: false,
+    })).toMatch(/review-required/i)
+    expect(dispatchContainmentReason({
+      assignmentCount: 1,
+      hasDependencies: false,
+      reviewRequired: false,
+      asyncRequested: true,
+    })).toMatch(/asynchronous/i)
+    expect(dispatchContainmentReason({
+      assignmentCount: 1,
+      hasDependencies: false,
+      reviewRequired: false,
+      asyncRequested: false,
+    })).toBeNull()
+  })
+
+  it.each([
+    {
+      label: 'parallel assignments',
+      body: {
+        assignments: [
+          { workerId: 'swarm1', task: 'First task' },
+          { workerId: 'swarm2', task: 'Second task' },
+        ],
+      },
+    },
+    {
+      label: 'dependencies',
+      body: {
+        assignments: [{ workerId: 'swarm1', task: 'Dependent task', dependsOn: ['prior'] }],
+      },
+    },
+    {
+      label: 'review-required work',
+      body: {
+        assignments: [{ workerId: 'swarm1', task: 'Review task', reviewRequired: true }],
+      },
+    },
+    {
+      label: 'async dispatch',
+      body: {
+        assignments: [{ workerId: 'swarm1', task: 'Async task' }],
+        allowAsync: true,
+      },
+    },
+    {
+      label: 'no-checkpoint dispatch',
+      body: {
+        assignments: [{ workerId: 'swarm1', task: 'No checkpoint task' }],
+        waitForCheckpoint: false,
+      },
+    },
+  ])('rejects $label before dispatch begins', async ({ body }) => {
+    await expect(dispatchSwarmAssignments(body)).rejects.toMatchObject({ status: 409 })
   })
 })
 

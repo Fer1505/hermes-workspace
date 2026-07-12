@@ -1,13 +1,17 @@
 import { marked } from 'marked'
 import { createContext, memo, useContext, useId, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { CodeBlock } from './code-block'
-import type { Components } from 'react-markdown'
+import type { Components, UrlTransform } from 'react-markdown'
 import { cn } from '@/lib/utils'
+import {
+  GENERATED_CONTENT_CONTAINMENT_REASON,
+  isSafeRasterMime,
+  isSafeRasterName,
+} from '@/lib/generated-content-containment'
 
 /**
  * Rewrite Workspace-local `MEDIA:<path>` tokens emitted by Hermes Agent to the
@@ -23,12 +27,14 @@ export function rewriteLocalMediaSources(content: string): string {
     return `/api/media?path=${encodeURIComponent(path)}`
   }
 
-  const markdownImage = /(!\[[^\]]*\]\()MEDIA:([^\)\s]+)(\))/g
+  const markdownImage = /(!\[[^\]]*\]\()MEDIA:([^\s)]+)(\))/g
   const withMarkdownImages = content.replace(
     markdownImage,
     (_match, prefix: string, mediaPath: string, suffix: string) => {
       const rewritten = rewritePath(mediaPath)
-      return rewritten ? `${prefix}${rewritten}${suffix}` : `${prefix}MEDIA:${mediaPath}${suffix}`
+      return rewritten
+        ? `${prefix}${rewritten}${suffix}`
+        : `${prefix}MEDIA:${mediaPath}${suffix}`
     },
   )
 
@@ -42,6 +48,43 @@ export function rewriteLocalMediaSources(content: string): string {
         : `${prefix}${quote}MEDIA:${mediaPath}${quote}`
     },
   )
+}
+
+export function isSafeMarkdownImageSource(source: string): boolean {
+  const trimmed = source.trim()
+  if (!trimmed) return false
+
+  if (trimmed.toLowerCase().startsWith('data:')) {
+    const separator = trimmed.search(/[;,]/)
+    const mime = separator > 5 ? trimmed.slice(5, separator) : ''
+    return isSafeRasterMime(mime)
+  }
+
+  if (!trimmed.startsWith('/api/media?')) return false
+
+  try {
+    const url = new URL(trimmed, 'http://workspace.invalid')
+    const paths = url.searchParams.getAll('path')
+    const path = paths[0] || ''
+    return (
+      url.origin === 'http://workspace.invalid' &&
+      url.pathname === '/api/media' &&
+      paths.length === 1 &&
+      isSafeRasterName(path)
+    )
+  } catch {
+    return false
+  }
+}
+
+const containedMarkdownUrlTransform: UrlTransform = (value, key, node) => {
+  if (key === 'src' && node.tagName === 'img') {
+    return isSafeMarkdownImageSource(value) ? value : undefined
+  }
+  if (key === 'href' && node.tagName === 'a') {
+    return value.trim().toLowerCase().startsWith('wiki:') ? value : undefined
+  }
+  return undefined
 }
 
 export type MarkdownProps = {
@@ -216,23 +259,27 @@ const INITIAL_COMPONENTS: Partial<Components> = {
     return <li className="leading-relaxed">{children}</li>
   },
   a: function AComponent({ children, href }) {
-    if (!href) {
-      return <span className="text-primary-950">{children}</span>
-    }
     return (
-      <a
-        href={href}
-        className="text-primary-950 underline decoration-primary-300 underline-offset-4 transition-colors hover:text-primary-950 hover:decoration-primary-500"
-        target="_blank"
-        rel="noopener noreferrer"
+      <span
+        className="text-primary-950 underline decoration-primary-300 underline-offset-4"
+        title={href || undefined}
       >
         {children}
-      </a>
+      </span>
     )
   },
   img: function ImgComponent({ src, alt, ...props }) {
-    if (!src) {
-      return null
+    if (!src || !isSafeMarkdownImageSource(src)) {
+      const label = alt?.trim() || 'generated image'
+      return (
+        <span
+          role="note"
+          className="inline-flex rounded border border-primary-200 bg-primary-50 px-2 py-1 text-xs text-primary-600"
+          title={GENERATED_CONTENT_CONTAINMENT_REASON}
+        >
+          [image preview contained: {label}]
+        </span>
+      )
     }
     return <img src={src} alt={alt ?? ''} {...props} />
   },
@@ -419,8 +466,9 @@ const HTML_SANITIZE_SCHEMA = {
     'wbr',
   ],
   attributes: {
-    '*': ['className', 'class', 'title', 'lang', 'dir'],
+    '*': ['title', 'lang', 'dir'],
     a: ['href', 'target', 'rel', 'download'],
+    code: [['className', /^language-/]],
     img: ['src', 'alt', 'width', 'height', 'loading'],
     td: ['colspan', 'rowspan', 'headers'],
     th: ['colspan', 'rowspan', 'headers', 'scope'],
@@ -435,8 +483,8 @@ const HTML_SANITIZE_SCHEMA = {
     ins: ['datetime'],
   },
   protocols: {
-    a: { href: ['http', 'https', 'mailto', 'tel'] },
-    img: { src: ['http', 'https', 'data'] },
+    href: ['wiki'],
+    src: ['data'],
   },
 }
 
@@ -451,15 +499,20 @@ const MemoizedMarkdownBlock = memo(
     return (
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SANITIZE_SCHEMA]]}
+        rehypePlugins={[[rehypeSanitize, HTML_SANITIZE_SCHEMA]]}
         components={components}
+        skipHtml
+        urlTransform={containedMarkdownUrlTransform}
       >
         {content}
       </ReactMarkdown>
     )
   },
   function propsAreEqual(prevProps, nextProps) {
-    return prevProps.content === nextProps.content
+    return (
+      prevProps.content === nextProps.content &&
+      prevProps.components === nextProps.components
+    )
   },
 )
 
@@ -469,13 +522,20 @@ function MarkdownComponent({
   children,
   id,
   className,
-  components = INITIAL_COMPONENTS,
+  components: componentOverrides,
 }: MarkdownProps) {
   const generatedId = useId()
   const blockId = id ?? generatedId
   const blocks = useMemo(
     () => parseMarkdownIntoBlocks(rewriteLocalMediaSources(children)),
     [children],
+  )
+  const components = useMemo(
+    () =>
+      componentOverrides
+        ? { ...INITIAL_COMPONENTS, ...componentOverrides }
+        : INITIAL_COMPONENTS,
+    [componentOverrides],
   )
 
   return (

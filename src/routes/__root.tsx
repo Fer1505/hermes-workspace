@@ -9,8 +9,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import appCss from '../styles.css?url'
 import { getRootSurfaceState } from './-root-layout-state'
-import {  fetchClaudeAuthStatus } from '@/lib/claude-auth'
-import type {AuthStatus} from '@/lib/claude-auth';
+import type { AuthStatus } from '@/lib/claude-auth'
+import { fetchClaudeAuthStatus } from '@/lib/claude-auth'
 import { SearchModal } from '@/components/search/search-modal'
 import { UsageMeter } from '@/components/usage-meter'
 import { TerminalShortcutListener } from '@/components/terminal-shortcut-listener'
@@ -222,7 +222,9 @@ export function wrapInlineScript(source: string): string {
 }
 
 type ServiceWorkerLike = {
-  register: (scriptURL: string, options?: RegistrationOptions) => Promise<unknown>
+  getRegistrations: () => Promise<
+    ReadonlyArray<{ unregister: () => Promise<boolean> | boolean }>
+  >
 }
 
 type CachesLike = {
@@ -230,25 +232,28 @@ type CachesLike = {
   delete: (name: string) => Promise<boolean> | boolean
 }
 
-export async function registerAppServiceWorker({
+export async function retireAppServiceWorkers({
   serviceWorker,
   cachesApi,
 }: {
   serviceWorker?: ServiceWorkerLike
   cachesApi?: CachesLike
 }): Promise<void> {
+  await serviceWorker
+    ?.getRegistrations()
+    .then((registrations) =>
+      Promise.allSettled(
+        registrations.map((registration) => registration.unregister()),
+      ),
+    )
+    .catch(() => undefined)
+
   await cachesApi
     ?.keys()
     .then((names) =>
       Promise.allSettled(names.map((name) => cachesApi.delete(name))),
     )
     .catch(() => undefined)
-
-  await serviceWorker
-    ?.register('/sw.js', { scope: '/' })
-    .catch((error: unknown) => {
-      console.warn('PWA service worker registration failed', error)
-    })
 }
 
 function RootLayout() {
@@ -299,7 +304,7 @@ function RootLayout() {
             modelConfigured?: boolean
           } | null,
         ) => {
-          if (status?.ok || (status?.chatReady && status?.modelConfigured)) {
+          if (status?.ok || (status?.chatReady && status.modelConfigured)) {
             localStorage.setItem(ONBOARDING_KEY, 'true')
             syncOnboardingCompletion()
           }
@@ -322,7 +327,7 @@ function RootLayout() {
       handleOnboardingCompleteChanged,
     )
 
-    void registerAppServiceWorker({
+    void retireAppServiceWorkers({
       serviceWorker:
         'serviceWorker' in navigator ? navigator.serviceWorker : undefined,
       cachesApi: 'caches' in window ? caches : undefined,

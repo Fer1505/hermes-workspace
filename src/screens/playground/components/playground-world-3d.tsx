@@ -1247,6 +1247,7 @@ function NPC({
   const ref = useRef<THREE.Group>(null)
   const base = useMemo(() => new THREE.Vector3(...position), [position])
   const phase = useMemo(() => Math.random() * Math.PI * 2, [])
+  const [isNear, setIsNear] = useState(false)
   const glbId = npcId || avatar
   const hasGlb = useGlbAvailable(glbId, isNear || highlight)
 
@@ -1269,7 +1270,6 @@ function NPC({
   }, [npcId, avatar])
 
   const lastNear = useRef(false)
-  const [isNear, setIsNear] = useState(false)
   useFrame(({ clock }) => {
     if (!ref.current) return
     if (drift) {

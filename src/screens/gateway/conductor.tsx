@@ -9,6 +9,7 @@ import { OfficeView } from './components/office-view'
 import type { AgentWorkingRow } from './components/agents-working-panel'
 import { type GatewaySession } from '@/lib/gateway-api'
 import { cn } from '@/lib/utils'
+import { GENERATED_CONTENT_CONTAINMENT_REASON } from '@/lib/generated-content-containment'
 import { type MissionHistoryEntry, type MissionHistoryWorkerDetail, useConductorGateway } from './hooks/use-conductor-gateway'
 
 type ConductorPhase = 'home' | 'preview' | 'active' | 'complete'
@@ -389,58 +390,6 @@ function WorkerCard({
       </div>
     </div>
   )
-}
-
-function usePreviewAvailability(previewUrl: string | null, enabled: boolean) {
-  const [failedProbes, setFailedProbes] = useState(0)
-  const [timedOut, setTimedOut] = useState(false)
-  const lastProbeRef = useRef(0)
-
-  useEffect(() => {
-    setFailedProbes(0)
-    setTimedOut(false)
-    lastProbeRef.current = 0
-  }, [enabled, previewUrl])
-
-  useEffect(() => {
-    if (!enabled || !previewUrl) return
-    const timer = window.setTimeout(() => setTimedOut(true), 6_000)
-    return () => window.clearTimeout(timer)
-  }, [enabled, previewUrl])
-
-  const exhausted = enabled && !!previewUrl && (failedProbes >= 4 || timedOut)
-
-  const probeQuery = useQuery({
-    queryKey: ['conductor', 'preview-probe', previewUrl],
-    queryFn: async () => {
-      if (!previewUrl) return false
-      try {
-        const res = await fetch(previewUrl)
-        if (!res.ok) return false
-        const text = await res.text()
-        return text.length > 20 && (text.includes('<') || text.includes('html'))
-      } catch {
-        return false
-      }
-    },
-    enabled: enabled && !!previewUrl && !exhausted,
-    retry: false,
-    refetchInterval: (query) => (query.state.data === true || exhausted ? false : 1_500),
-    staleTime: 5_000,
-  })
-
-  useEffect(() => {
-    if (!enabled || !previewUrl || probeQuery.data === true || probeQuery.dataUpdatedAt === 0) return
-    if (lastProbeRef.current === probeQuery.dataUpdatedAt) return
-    lastProbeRef.current = probeQuery.dataUpdatedAt
-    setFailedProbes((current) => current + 1)
-  }, [enabled, previewUrl, probeQuery.data, probeQuery.dataUpdatedAt])
-
-  return {
-    ready: probeQuery.data === true,
-    loading: enabled && !!previewUrl && !exhausted && probeQuery.data !== true,
-    unavailable: enabled && !!previewUrl && exhausted && probeQuery.data !== true,
-  }
 }
 
 function getShortModelName(model: string | null | undefined): string {
@@ -1022,8 +971,6 @@ export function Conductor() {
   }, [conductor.tasks, conductor.streamText, conductor.workerOutputs, conductor.workers, conductor.missionStartedAt])
   const completePhaseOutputLabel = useMemo(() => getOutputDisplayName(completePhaseProjectPath), [completePhaseProjectPath])
 
-  const previewUrl = completePhaseProjectPath ? `/api/preview-file?path=${encodeURIComponent(`${completePhaseProjectPath}/index.html`)}` : null
-
   const selectedHistoryOutputPath = useMemo(() => {
     const entry = conductor.selectedHistoryEntry
     if (!entry) return null
@@ -1038,13 +985,6 @@ export function Conductor() {
     return candidates[0] ?? null
   }, [conductor.selectedHistoryEntry])
   const selectedHistoryOutputLabel = useMemo(() => getOutputDisplayName(selectedHistoryOutputPath), [selectedHistoryOutputPath])
-  const selectedHistoryPreviewUrl = selectedHistoryOutputPath ? `/api/preview-file?path=${encodeURIComponent(`${selectedHistoryOutputPath}/index.html`)}` : null
-
-  // Skip preview probe for history entries — /tmp files are ephemeral and won't exist later.
-  // Only probe if the mission just completed (still in complete phase with matching output path).
-  const isLiveCompletePreview = phase === 'complete' && !!completePhaseProjectPath && selectedHistoryOutputPath === completePhaseProjectPath
-  const selectedHistoryPreview = usePreviewAvailability(selectedHistoryPreviewUrl, !!conductor.selectedHistoryEntry && isLiveCompletePreview)
-  const previewState = usePreviewAvailability(previewUrl, phase === 'complete')
 
   const completedTaskOutputs = useMemo(() => {
     return conductor.tasks
@@ -1052,10 +992,6 @@ export function Conductor() {
       .map((task) => ({
         ...task,
         extractedPath: extractProjectPath(task.output ?? ''),
-        previewUrl: (() => {
-          const extractedPath = extractProjectPath(task.output ?? '')
-          return extractedPath ? `/api/preview-file?path=${encodeURIComponent(`${extractedPath}/index.html`)}` : null
-        })(),
         previewText: (task.output ?? '').trim().slice(0, 200),
       }))
   }, [conductor.tasks])
@@ -1125,7 +1061,7 @@ export function Conductor() {
       const historyWorkerDetails = selectedHistoryEntry.workerDetails ?? []
       const historySummary = selectedHistoryEntry.completeSummary ?? selectedHistoryEntry.streamText
       const historyOutputText = selectedHistoryEntry.outputText?.trim() || selectedHistoryEntry.streamText?.trim() || ''
-      const showHistoryOutputFallback = !!historyOutputText && (!selectedHistoryOutputPath || selectedHistoryPreview.unavailable)
+      const showHistoryOutputFallback = !!historyOutputText
       const historyStatusLabel = selectedHistoryEntry.status === 'completed' ? 'Complete' : 'Stopped'
       const historyStatusClasses =
         selectedHistoryEntry.status === 'completed' ? 'border border-emerald-400/35 bg-emerald-500/10 text-emerald-300' : 'border border-red-400/35 bg-red-500/10 text-red-300'
@@ -1169,37 +1105,14 @@ export function Conductor() {
                 </div>
               </div>
 
-              {selectedHistoryOutputPath && selectedHistoryPreview.ready ? (
+              {selectedHistoryOutputPath ? (
                 <section className="overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-6 shadow-[0_24px_80px_var(--theme-shadow)]">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--theme-muted)]">Output Preview</p>
-                      <p className="mt-1 text-xs text-[var(--theme-muted-2)]">{selectedHistoryOutputLabel}</p>
-                    </div>
-                    <a
-                      href={selectedHistoryPreviewUrl!}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-xs font-medium text-[var(--theme-text)] transition-colors hover:border-[var(--theme-accent)] hover:text-[var(--theme-accent)]"
-                    >
-                      Open in new tab ↗
-                    </a>
-                  </div>
-                  <div className="mt-4 overflow-auto rounded-2xl border border-[var(--theme-border)] bg-white">
-                    <iframe src={selectedHistoryPreviewUrl!} className="h-[clamp(280px,55vh,520px)] w-full" sandbox="allow-scripts allow-same-origin" title="Mission history output preview" />
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--theme-muted)]">Generated output contained</p>
+                    <p className="mt-1 text-xs text-[var(--theme-muted-2)]">{selectedHistoryOutputLabel}</p>
+                    <p className="mt-3 text-sm leading-relaxed text-[var(--theme-muted)]">{GENERATED_CONTENT_CONTAINMENT_REASON}</p>
                   </div>
                 </section>
-              ) : selectedHistoryOutputPath && selectedHistoryPreview.loading ? (
-                <section className="overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-6 shadow-[0_24px_80px_var(--theme-shadow)]">
-                  <div className="flex items-center gap-3 text-sm text-[var(--theme-muted)]">
-                    <div className="size-4 animate-spin rounded-full border-2 border-[var(--theme-border)] border-t-[var(--theme-accent)]" />
-                    Loading output preview…
-                  </div>
-                </section>
-              ) : selectedHistoryOutputPath && selectedHistoryPreview.unavailable ? (
-                showHistoryOutputFallback ? null : (
-                  <p className="px-1 text-sm text-[var(--theme-muted)]">No preview available.</p>
-                )
               ) : null}
 
               <section className="overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-6 shadow-[0_24px_80px_var(--theme-shadow)]">
@@ -1258,18 +1171,11 @@ export function Conductor() {
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--theme-muted)]">Output</p>
                       <p className="mt-1 text-xs text-[var(--theme-muted-2)]">
-                        Preview unavailable
+                        Interactive preview contained
                         {selectedHistoryOutputPath ? ` for ${selectedHistoryOutputLabel}` : ''}.
                       </p>
                     </div>
                   </div>
-                  <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-5 py-4">
-                    <Markdown className="max-h-[600px] max-w-none overflow-auto text-sm text-[var(--theme-text)]">{historyOutputText}</Markdown>
-                  </div>
-                </section>
-              ) : historyOutputText ? (
-                <section className="overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-6 shadow-[0_24px_80px_var(--theme-shadow)]">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--theme-muted)]">Worker Output</p>
                   <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-5 py-4">
                     <Markdown className="max-h-[600px] max-w-none overflow-auto text-sm text-[var(--theme-text)]">{historyOutputText}</Markdown>
                   </div>
@@ -1967,15 +1873,13 @@ export function Conductor() {
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  {!completePhaseProjectPath || !previewState.ready ? (
-                    <Button
-                      type="button"
-                      onClick={() => setContinueModalOpen(true)}
-                      className="rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card2)] px-4 text-[var(--theme-text)] hover:border-[var(--theme-accent)] hover:text-[var(--theme-accent-strong)]"
-                    >
-                      Continue
-                    </Button>
-                  ) : null}
+                  <Button
+                    type="button"
+                    onClick={() => setContinueModalOpen(true)}
+                    className="rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card2)] px-4 text-[var(--theme-text)] hover:border-[var(--theme-accent)] hover:text-[var(--theme-accent-strong)]"
+                  >
+                    Continue
+                  </Button>
                   <Button type="button" onClick={handleNewMission} className="rounded-xl bg-[var(--theme-accent)] px-5 text-white hover:bg-[var(--theme-accent-strong)]">
                     New Mission
                   </Button>
@@ -1983,47 +1887,27 @@ export function Conductor() {
               </div>
             </div>
 
-            {completePhaseProjectPath && previewState.ready ? (
+            {completePhaseProjectPath ? (
               <section className="overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-6 shadow-[0_24px_80px_var(--theme-shadow)]">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--theme-muted)]">Output Preview</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--theme-muted)]">Generated output contained</p>
                     <p className="mt-1 text-xs text-[var(--theme-muted-2)]">{completePhaseProjectPath.split('/').pop() || 'index.html'}</p>
+                    <p className="mt-3 text-sm leading-relaxed text-[var(--theme-muted)]">{GENERATED_CONTENT_CONTAINMENT_REASON}</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={previewUrl!}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-xs font-medium text-[var(--theme-text)] transition-colors hover:border-[var(--theme-accent)] hover:text-[var(--theme-accent)]"
-                    >
-                      Open in new tab ↗
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => setContinueModalOpen(true)}
-                      className="inline-flex items-center gap-2 rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-xs font-medium text-[var(--theme-text)] transition-colors hover:border-[var(--theme-accent)] hover:text-[var(--theme-accent)]"
-                    >
-                      Continue
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-4 overflow-auto rounded-2xl border border-[var(--theme-border)] bg-white">
-                  <iframe src={previewUrl!} className="h-[clamp(280px,55vh,520px)] w-full" sandbox="allow-scripts allow-same-origin" title="Mission output preview" />
-                </div>
-              </section>
-            ) : completePhaseProjectPath && previewState.loading && !conductor.streamError ? (
-              <section className="overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] p-6 shadow-[0_24px_80px_var(--theme-shadow)]">
-                <div className="flex items-center gap-3 text-sm text-[var(--theme-muted)]">
-                  <div className="size-4 animate-spin rounded-full border-2 border-[var(--theme-border)] border-t-[var(--theme-accent)]" />
-                  Loading output preview…
+                  <button
+                    type="button"
+                    onClick={() => setContinueModalOpen(true)}
+                    className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-xs font-medium text-[var(--theme-text)] transition-colors hover:border-[var(--theme-accent)] hover:text-[var(--theme-accent)]"
+                  >
+                    Continue
+                  </button>
                 </div>
               </section>
             ) : null}
 
-            {/* Worker output fallback — show when no iframe preview is available */}
-            {(!completePhaseProjectPath || previewState.unavailable) &&
-              (() => {
+            {/* Generated output is always rendered as sanitized, contained Markdown. */}
+            {(() => {
                 const outputSections = conductor.workers
                   .map((worker, index) => {
                     const output = (conductor.workerOutputs[worker.key] ?? getLastAssistantMessage(worker.raw.messages as HistoryMessage[] | undefined)).trim()
@@ -2048,7 +1932,7 @@ export function Conductor() {
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--theme-muted)]">Output</p>
-                        <p className="mt-1 text-xs text-[var(--theme-muted-2)]">{completePhaseProjectPath ? `Preview unavailable for ${completePhaseOutputLabel}` : 'Agent work output'}</p>
+                        <p className="mt-1 text-xs text-[var(--theme-muted-2)]">{completePhaseProjectPath ? `Interactive preview contained for ${completePhaseOutputLabel}` : 'Agent work output'}</p>
                       </div>
                     </div>
                     <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--theme-border)] bg-[var(--theme-bg)] px-5 py-4">
@@ -2076,16 +1960,11 @@ export function Conductor() {
                             <p className="truncate text-sm font-medium text-[var(--theme-text)]">{task.title}</p>
                           </div>
                         </div>
-                        {task.previewUrl && (
-                          <a
-                            href={task.previewUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-xs font-medium text-[var(--theme-text)] transition-colors hover:border-[var(--theme-accent)] hover:text-[var(--theme-accent)]"
-                          >
-                            Preview
-                          </a>
-                        )}
+                        {task.extractedPath ? (
+                          <span className="inline-flex items-center gap-2 rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card2)] px-3 py-1.5 text-xs font-medium text-[var(--theme-muted)]">
+                            Preview contained
+                          </span>
+                        ) : null}
                       </div>
                       <p className="mt-3 text-sm text-[var(--theme-muted)]">
                         {task.previewText}

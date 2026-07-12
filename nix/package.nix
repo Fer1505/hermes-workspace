@@ -75,6 +75,9 @@ stdenv.mkDerivation (finalAttrs: {
     cp -r node_modules "$appDir/"
     cp -r skills "$appDir/"
     cp package.json server-entry.js "$appDir/"
+    mkdir -p "$appDir/server"
+    cp server/request-body-limit.cjs server/response-header-policy.cjs "$appDir/server/"
+    cp server/static-file-policy.cjs "$appDir/server/"
 
     # pty-helper.py: Vite's copy-pty-helper plugin writes it during build
     # but we also ensure it's present here as a belt-and-suspenders measure.

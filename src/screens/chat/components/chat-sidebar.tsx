@@ -254,7 +254,7 @@ function NavItem({
               render={
                 <Link
                   to={item.to}
-                  search={item.search}
+                  search={item.search as never}
                   hash={item.hash}
                   onClick={handleSelect}
                   className={cls}
@@ -272,7 +272,7 @@ function NavItem({
     return (
       <Link
         to={item.to}
-        search={item.search}
+        search={item.search as never}
         hash={item.hash}
         onClick={handleSelect}
         className={cls}

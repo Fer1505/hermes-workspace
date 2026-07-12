@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  registerAppServiceWorker,
-  wrapInlineScript,
-} from './__root'
+import { retireAppServiceWorkers, wrapInlineScript } from './__root'
 
 describe('root runtime guards', () => {
   it('wraps inline scripts in a top-level try/catch', () => {
@@ -12,18 +9,46 @@ describe('root runtime guards', () => {
     expect(wrapped).toContain("console.error('Inline bootstrap script failed'")
   })
 
-  it('clears old caches and registers the network-only PWA service worker', async () => {
-    const register = vi.fn().mockResolvedValue(undefined)
+  it('unregisters existing service workers and clears old caches', async () => {
+    const unregisterA = vi.fn().mockResolvedValue(true)
+    const unregisterB = vi.fn().mockResolvedValue(false)
     const deleteCache = vi.fn().mockResolvedValue(true)
 
     await expect(
-      registerAppServiceWorker({
-        serviceWorker: { register },
-        cachesApi: { keys: vi.fn().mockResolvedValue(['stale']), delete: deleteCache },
+      retireAppServiceWorkers({
+        serviceWorker: {
+          getRegistrations: vi
+            .fn()
+            .mockResolvedValue([
+              { unregister: unregisterA },
+              { unregister: unregisterB },
+            ]),
+        },
+        cachesApi: {
+          keys: vi.fn().mockResolvedValue(['stale', 'older']),
+          delete: deleteCache,
+        },
       }),
     ).resolves.toBeUndefined()
 
+    expect(unregisterA).toHaveBeenCalledOnce()
+    expect(unregisterB).toHaveBeenCalledOnce()
     expect(deleteCache).toHaveBeenCalledWith('stale')
-    expect(register).toHaveBeenCalledWith('/sw.js', { scope: '/' })
+    expect(deleteCache).toHaveBeenCalledWith('older')
+  })
+
+  it('fails safely when service-worker and cache APIs are absent or reject', async () => {
+    await expect(retireAppServiceWorkers({})).resolves.toBeUndefined()
+    await expect(
+      retireAppServiceWorkers({
+        serviceWorker: {
+          getRegistrations: vi.fn().mockRejectedValue(new Error('blocked')),
+        },
+        cachesApi: {
+          keys: vi.fn().mockRejectedValue(new Error('blocked')),
+          delete: vi.fn(),
+        },
+      }),
+    ).resolves.toBeUndefined()
   })
 })

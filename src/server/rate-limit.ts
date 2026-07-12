@@ -91,8 +91,11 @@ export function rateLimitResponse(): Response {
 export function requireJsonContentType(request: Request): Response | null {
   const method = request.method.toUpperCase()
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return null
-  const ct = request.headers.get('content-type') ?? ''
-  if (ct.includes('application/json')) return null
+  const mediaType = (request.headers.get('content-type') ?? '')
+    .split(';', 1)[0]
+    .trim()
+    .toLowerCase()
+  if (mediaType === 'application/json') return null
   return new Response(
     JSON.stringify({ error: 'Content-Type must be application/json' }),
     { status: 415, headers: { 'Content-Type': 'application/json' } },

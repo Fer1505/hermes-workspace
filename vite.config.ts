@@ -1,9 +1,18 @@
 import { URL, fileURLToPath } from 'node:url'
 import { execSync, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import {
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+} from 'node:fs'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createRequire } from 'node:module'
 import net from 'node:net'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, sep } from 'node:path'
 import os from 'node:os'
 
 // devtools removed
@@ -13,6 +22,228 @@ import tailwindcss from '@tailwindcss/vite'
 // nitro plugin removed (tanstackStart handles server runtime)
 import { defineConfig, loadEnv } from 'vite'
 import viteTsConfigPaths from 'vite-tsconfig-paths'
+
+type StaticRequestClassification = {
+  action: 'deny' | 'app' | 'static'
+  pathname?: string
+  relativePath?: string
+  status?: number
+  headers?: Readonly<Record<string, string>>
+  reason?: string
+  contentType?: string
+  immutable?: boolean
+}
+
+type StaticFilePolicy = {
+  STATIC_CONTENT_CONTAINMENT_REASON: string
+  INERT_STATIC_HEADERS: Readonly<Record<string, string>>
+  classifyStaticRequest: (
+    rawUrl: string,
+    method?: string,
+  ) => StaticRequestClassification
+  isApprovedPublicAssetPath: (relativePath: string) => boolean
+  resolveContainedStaticPath: (root: string, pathname: string) => string | null
+}
+
+const loadCommonJsModule = createRequire(import.meta.url)
+const {
+  STATIC_CONTENT_CONTAINMENT_REASON,
+  INERT_STATIC_HEADERS,
+  classifyStaticRequest,
+  isApprovedPublicAssetPath,
+  resolveContainedStaticPath,
+} = loadCommonJsModule('./server/static-file-policy.cjs') as StaticFilePolicy
+
+const PUBLIC_ASSET_ROOT = fileURLToPath(new URL('./public/', import.meta.url))
+const GENERATED_CLIENT_ASSET_PATTERN = new RegExp(
+  '^assets/(?:[^/]+/)*[^/]+[-._][A-Za-z0-9_-]{8,}\\.(?:css|js)$',
+  'i',
+)
+
+type ContainmentMiddleware = (
+  request: IncomingMessage,
+  response: ServerResponse,
+  next: () => void,
+) => void
+
+function isContainedPath(candidate: string, root: string): boolean {
+  const resolvedRoot = resolve(root)
+  const resolvedCandidate = resolve(candidate)
+  return (
+    resolvedCandidate === resolvedRoot ||
+    resolvedCandidate.startsWith(`${resolvedRoot}${sep}`)
+  )
+}
+
+export function isGeneratedClientAssetPath(relativePath: string): boolean {
+  return GENERATED_CLIENT_ASSET_PATTERN.test(relativePath)
+}
+
+export function isViteDevelopmentModulePath(
+  pathname: string | undefined,
+): boolean {
+  if (!pathname) return false
+  const isCompiledDependency =
+    pathname.startsWith('/node_modules/.vite/') &&
+    /\.(?:css|js)$/i.test(pathname)
+  const isWorkspaceSourceModule =
+    pathname.startsWith('/src/') && /\.(?:css|js|jsx|ts|tsx)$/i.test(pathname)
+  return (
+    pathname === '/@react-refresh' ||
+    pathname.startsWith('/@vite/') ||
+    pathname.startsWith('/@id/') ||
+    isCompiledDependency ||
+    isWorkspaceSourceModule
+  )
+}
+
+function applyResponseHeaders(
+  response: ServerResponse,
+  headers: Readonly<Record<string, string>>,
+): void {
+  for (const [name, value] of Object.entries(headers)) {
+    response.setHeader(name, value)
+  }
+}
+
+function rejectStaticRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  classification: StaticRequestClassification,
+): void {
+  const body = STATIC_CONTENT_CONTAINMENT_REASON
+  response.statusCode = classification.status ?? 404
+  applyResponseHeaders(response, INERT_STATIC_HEADERS)
+  if (classification.headers) {
+    applyResponseHeaders(response, classification.headers)
+  }
+  response.setHeader('Content-Type', 'text/plain; charset=utf-8')
+  response.setHeader('Content-Length', Buffer.byteLength(body))
+  response.end(request.method === 'HEAD' ? undefined : body)
+}
+
+function serveApprovedPublicAsset(
+  request: IncomingMessage,
+  response: ServerResponse,
+  classification: StaticRequestClassification,
+): boolean {
+  const relativePath = classification.relativePath
+  if (!relativePath || !isApprovedPublicAssetPath(relativePath)) return false
+
+  const filePath = resolveContainedStaticPath(
+    PUBLIC_ASSET_ROOT,
+    classification.pathname || `/${relativePath}`,
+  )
+  if (!filePath) return false
+
+  try {
+    const fileStat = lstatSync(filePath)
+    if (fileStat.isSymbolicLink() || !fileStat.isFile()) return false
+
+    const contentType = classification.contentType
+    if (!contentType) return false
+
+    applyResponseHeaders(response, INERT_STATIC_HEADERS)
+    if (classification.headers) {
+      applyResponseHeaders(response, classification.headers)
+    }
+    response.statusCode = 200
+    response.setHeader('Cache-Control', 'no-store')
+    response.setHeader('Content-Type', contentType)
+    response.setHeader('Content-Length', fileStat.size)
+
+    if (request.method === 'HEAD') {
+      response.end()
+      return true
+    }
+
+    const stream = createReadStream(filePath)
+    stream.once('error', () => response.destroy())
+    stream.pipe(response)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function createStaticContainmentMiddleware({
+  allowDevelopmentModules,
+}: {
+  allowDevelopmentModules: boolean
+}): ContainmentMiddleware {
+  return (request, response, next) => {
+    const rawUrl = request.url || '/'
+    const classification = classifyStaticRequest(rawUrl, request.method)
+
+    if (
+      allowDevelopmentModules &&
+      isViteDevelopmentModulePath(classification.pathname)
+    ) {
+      next()
+      return
+    }
+
+    if (classification.action === 'app') {
+      next()
+      return
+    }
+
+    if (
+      classification.action === 'static' &&
+      classification.relativePath &&
+      isGeneratedClientAssetPath(classification.relativePath)
+    ) {
+      next()
+      return
+    }
+
+    if (
+      classification.action === 'static' &&
+      serveApprovedPublicAsset(request, response, classification)
+    ) {
+      return
+    }
+
+    rejectStaticRequest(request, response, classification)
+  }
+}
+
+export function copyApprovedPublicAssets(
+  sourceRoot: string,
+  destinationRoot: string,
+): Array<string> {
+  const resolvedSourceRoot = resolve(sourceRoot)
+  const resolvedDestinationRoot = resolve(destinationRoot)
+  const copied: Array<string> = []
+
+  if (!existsSync(resolvedSourceRoot)) return copied
+
+  const visit = (directory: string, relativeDirectory = ''): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const relativePath = relativeDirectory
+        ? `${relativeDirectory}/${entry.name}`
+        : entry.name
+      const sourcePath = resolve(directory, entry.name)
+
+      if (entry.isDirectory()) {
+        visit(sourcePath, relativePath)
+        continue
+      }
+
+      if (!entry.isFile() || !isApprovedPublicAssetPath(relativePath)) continue
+
+      const destinationPath = resolve(resolvedDestinationRoot, relativePath)
+      if (!isContainedPath(destinationPath, resolvedDestinationRoot)) continue
+
+      mkdirSync(dirname(destinationPath), { recursive: true })
+      copyFileSync(sourcePath, destinationPath)
+      copied.push(relativePath)
+    }
+  }
+
+  visit(resolvedSourceRoot)
+  return copied
+}
 
 // ---------------------------------------------------------------------------
 // Hermes Agent auto-start helpers
@@ -28,7 +259,8 @@ import viteTsConfigPaths from 'vite-tsconfig-paths'
 function resolveClaudeAgentDir(env: Record<string, string>): string | null {
   const candidates: string[] = []
 
-  const explicitAgentPath = env.HERMES_AGENT_PATH?.trim() || env.CLAUDE_AGENT_PATH?.trim()
+  const explicitAgentPath =
+    env.HERMES_AGENT_PATH?.trim() || env.CLAUDE_AGENT_PATH?.trim()
   if (explicitAgentPath) {
     candidates.push(explicitAgentPath)
   }
@@ -225,7 +457,6 @@ const config = defineConfig(({ mode, command }) => {
   let workspaceDaemonStarted = false
   let workspaceDaemonStarting = false
   let workspaceDaemonShuttingDown = false
-  let workspaceDaemonRestarting = false
   let workspaceDaemonChild: ChildProcess | null = null
   let workspaceDaemonRetryCount = 0
   const workspaceDaemonPort = '3099'
@@ -295,7 +526,7 @@ const config = defineConfig(({ mode, command }) => {
         workspaceDaemonChild = null
       }
 
-      if (workspaceDaemonShuttingDown || workspaceDaemonRestarting) {
+      if (workspaceDaemonShuttingDown) {
         workspaceDaemonStarted = false
         workspaceDaemonStarting = false
         return
@@ -336,58 +567,6 @@ const config = defineConfig(({ mode, command }) => {
     })
   }
 
-  const stopWorkspaceDaemon = async () => {
-    const child = workspaceDaemonChild
-    if (!child) {
-      workspaceDaemonStarted = false
-      workspaceDaemonStarting = false
-      return
-    }
-
-    workspaceDaemonRestarting = true
-
-    await new Promise<void>((resolve) => {
-      const exitTimer = setTimeout(() => {
-        if (!child.killed && child.pid) {
-          try {
-            process.kill(child.pid, 'SIGKILL')
-          } catch {
-            // ignore
-          }
-        }
-      }, 5000)
-
-      child.once('exit', () => {
-        clearTimeout(exitTimer)
-        resolve()
-      })
-
-      if (child.pid) {
-        try {
-          process.kill(child.pid, 'SIGTERM')
-        } catch {
-          clearTimeout(exitTimer)
-          resolve()
-        }
-      } else {
-        clearTimeout(exitTimer)
-        resolve()
-      }
-    })
-
-    workspaceDaemonStarted = false
-    workspaceDaemonStarting = false
-    workspaceDaemonRestarting = false
-  }
-
-  const restartWorkspaceDaemon = async () => {
-    workspaceDaemonRetryCount = 0
-    await stopWorkspaceDaemon()
-    workspaceDaemonStarted = false
-    workspaceDaemonStarting = false
-    startWorkspaceDaemon()
-  }
-
   const isPortInUse = (port: number) =>
     new Promise<boolean>((resolvePortCheck) => {
       const socket = net.createConnection({ port, host: '127.0.0.1' })
@@ -414,28 +593,24 @@ const config = defineConfig(({ mode, command }) => {
 
   // Allow access from Tailscale, LAN, or custom domains via env var
   // e.g. CLAUDE_ALLOWED_HOSTS=my-server.tail1234.ts.net,192.168.1.50
-  const _allowedHosts: string[] | true = env.CLAUDE_ALLOWED_HOSTS?.trim()
-    ? env
-        .CLAUDE_ALLOWED_HOSTS!.split(',')
+  const configuredAllowedHosts = env.CLAUDE_ALLOWED_HOSTS?.trim()
+  const allowedHosts: Array<string> = configuredAllowedHosts
+    ? configuredAllowedHosts
+        .split(',')
         .map((h) => h.trim())
         .filter(Boolean)
     : ['.ts.net'] // allow all Tailscale hostnames by default
-  let proxyTarget = 'http://127.0.0.1:18789'
-
-  try {
-    const parsed = new URL(claudeApiUrl)
-    parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:'
-    parsed.pathname = ''
-    proxyTarget = parsed.toString().replace(/\/$/, '')
-  } catch {
-    // fallback
-  }
-
   return {
+    // Vite's implicit public-directory handling copied every file verbatim and
+    // served it ahead of application routing. The containment plugin below is
+    // now the only path from reviewed public assets to dev, preview, or client
+    // output.
+    publicDir: false,
     test: {
       exclude: [
         '**/node_modules/**',
         '**/dist/**',
+        '**/e2e/**',
         '**/skills-bundle/**',
         '**/.{idea,git,cache,output,temp}/**',
       ],
@@ -488,7 +663,9 @@ const config = defineConfig(({ mode, command }) => {
       // COEP 'credentialless' enables isolation WITHOUT requiring CORP headers
       // on every cross-origin asset (fonts/images); the web client already sends
       // cross-origin-resource-policy: cross-origin so the iframe still embeds.
-      // Same-origin agent API (/ws-claude, /api/claude-proxy) is unaffected.
+      // Backend calls must use reviewed TanStack/server routes so response
+      // content cannot bypass generated-content containment. Vite exposes no
+      // same-origin backend proxy mount.
       headers: {
         'Cross-Origin-Opener-Policy': 'same-origin',
         'Cross-Origin-Embedder-Policy': 'credentialless',
@@ -504,7 +681,7 @@ const config = defineConfig(({ mode, command }) => {
       // of silently hopping to 3001+ so launchctl/service health matches the
       // actual listening socket.
       strictPort: true,
-      allowedHosts: true,
+      allowedHosts,
       watch: {
         ignored: [
           // NOTE: the generated TanStack route tree must NOT be added to this
@@ -537,43 +714,38 @@ const config = defineConfig(({ mode, command }) => {
           '**/*.log',
         ],
       },
-      proxy: {
-        // WebSocket proxy: clients connect to /ws-claude on the Hermes Workspace
-        // server (any IP/port), which internally forwards to the local server.
-        // This means phone/LAN/Docker users never need to reach port 18789 directly.
-        '/ws-claude': {
-          target: proxyTarget,
-          changeOrigin: false,
-          ws: true,
-          rewrite: (path) => path.replace(/^\/ws-claude/, ''),
-        },
-        // REST API proxy: API proxy for Hermes backend
-        '/api/claude-proxy': {
-          target: proxyTarget,
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api\/claude-proxy/, ''),
-        },
-        '/claude-ui': {
-          target: proxyTarget,
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/claude-ui/, ''),
-          ws: true,
-          configure: (proxy) => {
-            proxy.on('proxyRes', (_proxyRes) => {
-              // Strip iframe-blocking headers so we can embed
-              delete _proxyRes.headers['x-frame-options']
-              delete _proxyRes.headers['content-security-policy']
-            })
-          },
-        },
-        '/workspace-api': {
-          target: 'http://127.0.0.1:3099',
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/workspace-api/, ''),
-        },
-      },
+    },
+    preview: {
+      allowedHosts,
     },
     plugins: [
+      {
+        name: 'static-content-containment',
+        enforce: 'pre',
+        configureServer(server) {
+          server.middlewares.use(
+            createStaticContainmentMiddleware({
+              allowDevelopmentModules: true,
+            }),
+          )
+        },
+        configurePreviewServer(server) {
+          server.middlewares.use(
+            createStaticContainmentMiddleware({
+              allowDevelopmentModules: false,
+            }),
+          )
+        },
+        writeBundle(outputOptions) {
+          if (this.environment?.name !== 'client') return
+          if (!outputOptions.dir) {
+            throw new Error(
+              'Client asset containment requires a directory build output.',
+            )
+          }
+          copyApprovedPublicAssets(PUBLIC_ASSET_ROOT, outputOptions.dir)
+        },
+      },
       // devtools(),
       // this is the plugin that enables path aliases
       viteTsConfigPaths({
@@ -632,7 +804,7 @@ const config = defineConfig(({ mode, command }) => {
             res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
             next()
           })
-          server.middlewares.use(async (req, res, next) => {
+          server.middlewares.use((req, res, next) => {
             const requestPath = req.url?.split('?')[0]
             if (req.method === 'GET' && requestPath === '/api/healthcheck') {
               res.statusCode = 200
@@ -649,29 +821,7 @@ const config = defineConfig(({ mode, command }) => {
             // body ({ok, mode, backend}) which silently broke things like
             // useFeatureCapability/useFeatureAvailable in dev mode. See #285.
 
-            if (
-              req.method !== 'POST' ||
-              requestPath !== '/api/workspace/daemon/restart'
-            ) {
-              next()
-              return
-            }
-
-            try {
-              await restartWorkspaceDaemon()
-              res.statusCode = 200
-              res.setHeader('content-type', 'application/json')
-              res.end(JSON.stringify({ ok: true }))
-            } catch (error) {
-              res.statusCode = 500
-              res.setHeader('content-type', 'application/json')
-              res.end(
-                JSON.stringify({
-                  error:
-                    error instanceof Error ? error.message : 'Internal error',
-                }),
-              )
-            }
+            next()
           })
 
           // Dev-only: disable Node's default 5-minute request timeout so

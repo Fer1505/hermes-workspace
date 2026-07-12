@@ -377,8 +377,10 @@ export function lifecycleHandoffPath(workerId: string): string {
 
 function tmuxKill(workerId: string): Promise<{ ok: boolean; error?: string }> {
   const session = `swarm-${workerId}`
+  const binary = tmuxBin()
+  if (!binary) return Promise.resolve({ ok: false, error: 'tmux unavailable on this platform' })
   return new Promise((resolve) => {
-    execFile(tmuxBin(), ['kill-session', '-t', session], (err, _out, stderr) => {
+    execFile(binary, ['kill-session', '-t', session], (err, _out, stderr) => {
       if (err) return resolve({ ok: false, error: stderr?.toString() || err.message })
       resolve({ ok: true })
     })
@@ -389,8 +391,10 @@ function tmuxStart(workerId: string): Promise<{ ok: boolean; error?: string }> {
   const session = `swarm-${workerId}`
   const wrapper = join(homedir(), '.local', 'bin', workerId)
   if (!existsSync(wrapper)) return Promise.resolve({ ok: false, error: `Wrapper not found: ${wrapper}` })
+  const binary = tmuxBin()
+  if (!binary) return Promise.resolve({ ok: false, error: 'tmux unavailable on this platform' })
   return new Promise((resolve) => {
-    execFile(tmuxBin(), ['new-session', '-d', '-s', session, wrapper], (err, _out, stderr) => {
+    execFile(binary, ['new-session', '-d', '-s', session, wrapper], (err, _out, stderr) => {
       if (err) return resolve({ ok: false, error: stderr?.toString() || err.message })
       resolve({ ok: true })
     })

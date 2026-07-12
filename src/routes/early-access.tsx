@@ -21,7 +21,7 @@ function EarlyAccessRoute() {
 
       <div className="mx-auto w-full max-w-[760px] rounded-[2rem] border border-[#d9b35f]/24 bg-[#05080e]/82 p-8 shadow-[0_40px_140px_rgba(0,0,0,.52)] backdrop-blur-2xl sm:p-12">
         <div className="flex items-center gap-3">
-          <img src="/hermesworld-logo.svg" alt="HermesWorld" className="h-10 w-10 rounded-2xl shadow-[0_0_34px_rgba(34,211,238,.18)]" />
+          <img src="/assets/hermesworld/art/hermesworld-app-icon.png" alt="HermesWorld" className="h-10 w-10 rounded-2xl shadow-[0_0_34px_rgba(34,211,238,.18)]" />
           <div>
             <div className="font-serif text-lg font-bold tracking-[-0.03em] text-[#f8e4ac]">
               Hermes<span className="text-cyan-200">World</span>

@@ -10,6 +10,7 @@ import {
   PreviewCardPopup,
   PreviewCardTrigger,
 } from '@/components/ui/preview-card'
+import { isSafeMarkdownImageSource } from '@/components/prompt-kit/markdown'
 import { cn } from '@/lib/utils'
 
 type AttachmentPreviewProps = {
@@ -35,6 +36,10 @@ export function AttachmentPreview({
   className,
 }: AttachmentPreviewProps) {
   const hasError = Boolean(attachment.error)
+  const safePreview =
+    attachment.preview && isSafeMarkdownImageSource(attachment.preview)
+      ? attachment.preview
+      : null
 
   return (
     <PreviewCard>
@@ -50,9 +55,9 @@ export function AttachmentPreview({
             )}
           >
             <div className="relative shrink-0">
-              {attachment.preview ? (
+              {safePreview ? (
                 <img
-                  src={attachment.preview}
+                  src={safePreview}
                   alt={attachment.file.name}
                   className="size-7 rounded object-cover"
                 />
@@ -97,9 +102,9 @@ export function AttachmentPreview({
       />
       <PreviewCardPopup align="end" sideOffset={8} className="w-52">
         <div className="space-y-2">
-          {attachment.preview ? (
+          {safePreview ? (
             <img
-              src={attachment.preview}
+              src={safePreview}
               alt={attachment.file.name}
               className="max-h-36 w-full rounded-md object-cover"
             />

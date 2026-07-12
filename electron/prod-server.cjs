@@ -1,6 +1,17 @@
 const http = require('http')
 const fs = require('fs')
 const path = require('path')
+const {
+  MAX_REQUEST_BODY_BYTES,
+  readBoundedRequestBody,
+  RequestBodyTooLargeError,
+} = require('../server/request-body-limit.cjs')
+const {
+  STATIC_FILE_CONTAINMENT_REASON,
+  STATIC_FILE_DENIAL_HEADERS,
+  classifyStaticRequest,
+  resolveContainedStaticPath,
+} = require('../server/static-file-policy.cjs')
 
 const portArg = process.argv.find(
   (value, index, arr) => arr[index - 1] === '--port',
@@ -16,22 +27,13 @@ const UNBUNDLED_SERVER = path.join(
   'server.js',
 )
 
-const MIME_TYPES = {
-  '.html': 'text/html',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.json': 'application/json',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.webp': 'image/webp',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.webmanifest': 'application/manifest+json',
+function endStaticDenial(req, res, classification) {
+  const reason = classification.reason || STATIC_FILE_CONTAINMENT_REASON
+  res.writeHead(classification.status || 404, {
+    ...STATIC_FILE_DENIAL_HEADERS,
+    'Content-Length': Buffer.byteLength(reason),
+  })
+  res.end(req.method === 'HEAD' ? undefined : reason)
 }
 
 async function loadServerBuild() {
@@ -56,22 +58,41 @@ async function main() {
 
   const server = http.createServer(async (req, res) => {
     const url = req.url || '/'
-    const pathname = url.split('?')[0]
 
-    if (pathname !== '/' && !pathname.startsWith('/api/')) {
-      const filePath = path.join(DIST_CLIENT, pathname)
-      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-        const ext = path.extname(filePath)
-        const mime = MIME_TYPES[ext] || 'application/octet-stream'
-        const content = fs.readFileSync(filePath)
-        res.writeHead(200, {
-          'Content-Type': mime,
-          'Cache-Control': pathname.includes('/assets/')
-            ? 'public, max-age=31536000, immutable'
-            : 'public, max-age=3600',
-        })
-        res.end(content)
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      const classification = classifyStaticRequest(url, req.method)
+      if (classification.action === 'deny') {
+        endStaticDenial(req, res, classification)
         return
+      }
+      if (classification.action === 'static') {
+        const filePath = resolveContainedStaticPath(
+          DIST_CLIENT,
+          classification.pathname,
+        )
+        if (!filePath) {
+          endStaticDenial(req, res, classification)
+          return
+        }
+        try {
+          const fileStat = fs.statSync(filePath)
+          if (!fileStat.isFile()) throw new Error('not a file')
+          const content =
+            req.method === 'HEAD' ? null : fs.readFileSync(filePath)
+          res.writeHead(200, {
+            ...classification.headers,
+            'Content-Type': classification.contentType,
+            'Content-Length': content?.length ?? fileStat.size,
+            'Cache-Control': classification.immutable
+              ? 'public, max-age=31536000, immutable'
+              : 'no-store',
+          })
+          res.end(content || undefined)
+          return
+        } catch {
+          endStaticDenial(req, res, classification)
+          return
+        }
       }
     }
 
@@ -89,11 +110,7 @@ async function main() {
         headers,
         body:
           req.method !== 'GET' && req.method !== 'HEAD'
-            ? await new Promise((resolve) => {
-                const chunks = []
-                req.on('data', (chunk) => chunks.push(chunk))
-                req.on('end', () => resolve(Buffer.concat(chunks)))
-              })
+            ? await readBoundedRequestBody(req, MAX_REQUEST_BODY_BYTES)
             : undefined,
         duplex: 'half',
       })
@@ -117,6 +134,15 @@ async function main() {
       }
       res.end()
     } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        res.writeHead(413, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+          Connection: 'close',
+        })
+        res.end(JSON.stringify({ ok: false, error: 'Request body too large' }))
+        return
+      }
       console.error('[Hermes Workspace desktop] SSR error:', error)
       res.writeHead(500, { 'Content-Type': 'text/plain' })
       res.end('Internal Server Error')

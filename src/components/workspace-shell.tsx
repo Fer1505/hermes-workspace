@@ -70,7 +70,7 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
   })
   const search = useRouterState({
     select: (state) => state.location.search,
-  })
+  }) as Record<string, unknown>
   const isElectron = useMemo(
     () =>
       typeof navigator !== 'undefined' && /Electron/.test(navigator.userAgent),

@@ -12,11 +12,15 @@ import {
   shouldAutoExpandHermesActivityCard,
 } from './streaming-activity-ui'
 import { TuiActivityCard } from './tui-activity-card'
+import type { Components } from 'react-markdown'
 import type { ChatAttachment, ChatMessage, SelectionCardContent, ToolCallContent } from '../types'
 import type { ToolPart } from '@/components/prompt-kit/tool'
 import { AssistantAvatar, UserAvatar } from '@/components/avatars'
 import { CodeBlock } from '@/components/prompt-kit/code-block'
-import { Markdown } from '@/components/prompt-kit/markdown'
+import {
+  Markdown,
+  isSafeMarkdownImageSource,
+} from '@/components/prompt-kit/markdown'
 import { Message, MessageContent } from '@/components/prompt-kit/message'
 import {
   DialogClose,
@@ -36,11 +40,31 @@ import {
   useChatSettingsStore,
 } from '@/hooks/use-chat-settings'
 import { cn } from '@/lib/utils'
+import {
+  GENERATED_CONTENT_CONTAINMENT_REASON,
+  isExecutableGeneratedContentMime,
+  isExecutableGeneratedContentName,
+  isSafeRasterMime,
+  isSafeRasterName,
+} from '@/lib/generated-content-containment'
 import { CHAT_SUBMIT_SELECTION_EVENT } from '@/screens/chat/chat-events'
 
 const WORDS_PER_TICK = 4
 const TICK_INTERVAL_MS = 50
 const STUCK_SENDING_THRESHOLD_MS = 120_000
+
+const INERT_ATTACHMENT_MARKDOWN_COMPONENTS = {
+  a: ({ children, href }) => (
+    <span className="underline decoration-primary-300" title={href}>
+      {children}
+    </span>
+  ),
+  img: ({ alt, src }) => (
+    <span className="font-mono text-xs" title={src}>
+      [image reference: {alt || 'unnamed'}]
+    </span>
+  ),
+} satisfies Partial<Components>
 
 function isWhitespaceCharacter(value: string): boolean {
   return /\s/.test(value)
@@ -1285,16 +1309,38 @@ function attachmentExtension(attachment: ChatAttachment): string {
   return fileName.split('.').pop()?.trim().toLowerCase() || ''
 }
 
-function isImageAttachment(attachment: ChatAttachment): boolean {
+export function isRenderableSafeRasterAttachment(
+  attachment: ChatAttachment,
+): boolean {
   const contentType =
     typeof attachment.contentType === 'string'
       ? attachment.contentType.trim().toLowerCase()
       : ''
-  if (contentType.startsWith('image/')) return true
+  const name =
+    typeof attachment.name === 'string' && attachment.name.trim()
+      ? attachment.name.trim()
+      : attachmentSource(attachment).split(/[?#]/, 1)[0] || ''
 
-  const ext = attachmentExtension(attachment)
-  return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'].includes(
-    ext,
+  if (
+    !isSafeRasterName(name) ||
+    !isSafeMarkdownImageSource(attachmentSource(attachment))
+  ) {
+    return false
+  }
+  return contentType.length === 0 || isSafeRasterMime(contentType)
+}
+
+function isContainedAttachment(attachment: ChatAttachment): boolean {
+  const contentType =
+    typeof attachment.contentType === 'string' ? attachment.contentType : ''
+  const name =
+    typeof attachment.name === 'string' && attachment.name.trim()
+      ? attachment.name.trim()
+      : attachmentSource(attachment).split(/[?#]/, 1)[0] || ''
+
+  return (
+    isExecutableGeneratedContentName(name) ||
+    isExecutableGeneratedContentMime(contentType)
   )
 }
 
@@ -1315,6 +1361,15 @@ function decodeAttachmentText(attachment: ChatAttachment): string {
   for (const candidate of candidates) {
     if (typeof candidate !== 'string' || candidate.trim().length === 0) continue
     const trimmed = candidate.trim()
+
+    if (trimmed.length > 200_000) {
+      const commaIndex = trimmed.indexOf(',')
+      const prefix =
+        trimmed.startsWith('data:') && commaIndex >= 0
+          ? trimmed.slice(0, commaIndex + 1)
+          : trimmed.slice(0, 2_000)
+      return `${prefix}\n[attachment content omitted from inline display]`
+    }
 
     if (!trimmed.startsWith('data:')) {
       return trimmed
@@ -1342,12 +1397,10 @@ function decodeAttachmentText(attachment: ChatAttachment): string {
 function MarkdownDocumentCard({
   title,
   content,
-  openHref,
   className,
 }: {
   title: string
   content: string
-  openHref?: string
   className?: string
 }) {
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview')
@@ -1398,23 +1451,18 @@ function MarkdownDocumentCard({
               </Button>
             </div>
           ) : null}
-          {openHref ? (
-            <a
-              href={openHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-primary-700 underline decoration-primary-300 underline-offset-4 hover:decoration-primary-500"
-            >
-              Open
-            </a>
-          ) : null}
         </div>
       </div>
 
       <div className="max-h-[26rem] overflow-auto p-3">
         {hasContent ? (
           viewMode === 'preview' ? (
-            <Markdown className="text-sm">{content}</Markdown>
+            <Markdown
+              className="text-sm"
+              components={INERT_ATTACHMENT_MARKDOWN_COMPONENTS}
+            >
+              {content}
+            </Markdown>
           ) : (
             <CodeBlock content={content} language="markdown" className="my-0" />
           )
@@ -1433,7 +1481,6 @@ function MarkdownAttachmentCard({
 }: {
   attachment: ChatAttachment
 }) {
-  const source = attachmentSource(attachment)
   const content = useMemo(() => decodeAttachmentText(attachment), [attachment])
   const ext = attachmentExtension(attachment)
 
@@ -1441,8 +1488,48 @@ function MarkdownAttachmentCard({
     <MarkdownDocumentCard
       title={`${attachment.name || 'Markdown attachment'}${ext ? ` • ${ext.toUpperCase()}` : ''}`}
       content={content}
-      openHref={source || undefined}
     />
+  )
+}
+
+function ContainedAttachmentCard({
+  attachment,
+}: {
+  attachment: ChatAttachment
+}) {
+  const content = decodeAttachmentText(attachment)
+  const source = attachmentSource(attachment)
+  const sourceSummary = source.startsWith('data:')
+    ? `${source.slice(0, Math.max(0, source.indexOf(',') + 1))}[content omitted]`
+    : source.trim()
+  const displayContent = content.trim() || sourceSummary
+  const ext = attachmentExtension(attachment)
+
+  return (
+    <div className="w-full max-w-[36rem] overflow-hidden rounded-2xl border border-primary-200 bg-primary-50/70">
+      <div className="border-b border-primary-200 px-3 py-2.5">
+        <div className="truncate text-sm font-medium text-primary-900">
+          {attachment.name || 'Generated attachment'}
+        </div>
+        <div className="mt-0.5 text-[11px] text-primary-600">
+          {(attachment.contentType || ext || 'file').toUpperCase()} · preview contained
+        </div>
+      </div>
+      <div className="space-y-3 p-3">
+        <p className="text-xs leading-relaxed text-primary-600">
+          {GENERATED_CONTENT_CONTAINMENT_REASON}
+        </p>
+        {displayContent ? (
+          <CodeBlock
+            content={displayContent}
+            language={artifactLanguage(ext)}
+            className="my-0 max-h-[26rem] overflow-auto"
+          />
+        ) : (
+          <p className="text-sm text-primary-600">No source was captured.</p>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -1527,18 +1614,25 @@ function artifactLanguage(type: string): string {
 }
 
 function ArtifactPreviewBody({ artifact }: { artifact: InlineArtifact }) {
-  if (artifact.type === 'html' || artifact.type === 'svg') {
+  const contained =
+    isExecutableGeneratedContentName(`artifact.${artifact.type}`) ||
+    isExecutableGeneratedContentMime(artifact.type)
+
+  if (contained) {
     return (
-      <iframe
-        title={artifact.title}
-        sandbox="allow-scripts"
-        srcDoc={artifact.content}
-        className="h-[60vh] w-full rounded-lg border"
-        style={{
-          borderColor: 'var(--theme-border)',
-          background: 'white',
-        }}
-      />
+      <div className="space-y-3">
+        <p
+          className="rounded-lg border p-3 text-xs leading-relaxed"
+          style={{ borderColor: 'var(--theme-border)' }}
+        >
+          {GENERATED_CONTENT_CONTAINMENT_REASON}
+        </p>
+        <CodeBlock
+          content={artifact.content}
+          language={artifactLanguage(artifact.type)}
+          className="my-0 max-h-[60vh] overflow-auto"
+        />
+      </div>
     )
   }
 
@@ -1548,7 +1642,12 @@ function ArtifactPreviewBody({ artifact }: { artifact: InlineArtifact }) {
         className="max-h-[60vh] overflow-auto rounded-lg border p-4"
         style={{ borderColor: 'var(--theme-border)' }}
       >
-        <Markdown className="text-sm">{artifact.content}</Markdown>
+        <Markdown
+          className="text-sm"
+          components={INERT_ATTACHMENT_MARKDOWN_COMPONENTS}
+        >
+          {artifact.content}
+        </Markdown>
       </div>
     )
   }
@@ -1595,7 +1694,7 @@ function InlineArtifactCard({ artifact }: { artifact: InlineArtifact }) {
             ) : null}
           </div>
           <Button type="button" variant="outline" onClick={() => setOpen(true)}>
-            Open
+            View source
           </Button>
         </div>
       </div>
@@ -1836,18 +1935,15 @@ function InlineToolSectionItem({
                   ) : null}
                 </div>
                 {artifactPath ? (
-                  <a
-                    href={artifactPath}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <span
                     className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium"
                     style={{
                       background: 'var(--theme-card2)',
-                      color: 'var(--theme-text)',
+                      color: 'var(--theme-muted)',
                     }}
                   >
-                    Open ↗
-                  </a>
+                    Path contained
+                  </span>
                 ) : null}
               </div>
               {artifactPreview ? (
@@ -2293,7 +2389,7 @@ function MessageItemComponent({
             : p.source?.url || p.url || ''
         return { id: `inline-img-${i}`, src }
       })
-      .filter((img) => img.src.length > 0)
+      .filter((img) => isSafeMarkdownImageSource(img.src))
   }, [message.content])
   const hasInlineImages = inlineImages.length > 0
   const selectionCards = useMemo(
@@ -2717,17 +2813,16 @@ function MessageItemComponent({
                 {attachments.map((attachment) => {
                   const source = attachmentSource(attachment)
                   const ext = attachmentExtension(attachment)
-                  const imageAttachment = isImageAttachment(attachment)
+                  const imageAttachment =
+                    isRenderableSafeRasterAttachment(attachment)
                   const markdownAttachment = isMarkdownAttachment(attachment)
+                  const containedAttachment = isContainedAttachment(attachment)
 
                   if (imageAttachment) {
                     return (
-                      <a
+                      <div
                         key={attachment.id}
-                        href={source}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block overflow-hidden rounded-lg border border-primary-200 hover:border-primary-400 transition-colors max-w-full"
+                        className="block overflow-hidden rounded-lg border border-primary-200 max-w-full"
                       >
                         <img
                           src={source}
@@ -2735,7 +2830,16 @@ function MessageItemComponent({
                           className="max-h-64 w-auto max-w-full object-contain"
                           loading="lazy"
                         />
-                      </a>
+                      </div>
+                    )
+                  }
+
+                  if (containedAttachment) {
+                    return (
+                      <ContainedAttachmentCard
+                        key={attachment.id || attachment.name || source}
+                        attachment={attachment}
+                      />
                     )
                   }
 
@@ -2754,12 +2858,9 @@ function MessageItemComponent({
                   }
 
                   return (
-                    <a
+                    <div
                       key={attachment.id}
-                      href={source}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex max-w-full items-center gap-2 rounded-xl border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-700 hover:border-primary-400"
+                      className="inline-flex max-w-full items-center gap-2 rounded-xl border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-700"
                     >
                       <span>📄</span>
                       <span className="truncate">
@@ -2768,7 +2869,7 @@ function MessageItemComponent({
                       <span className="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] uppercase text-primary-600">
                         {ext || 'file'}
                       </span>
-                    </a>
+                    </div>
                   )
                 })}
               </div>
@@ -2776,12 +2877,9 @@ function MessageItemComponent({
             {hasInlineImages && (
               <div className="flex flex-wrap gap-2">
                 {inlineImages.map((img) => (
-                  <a
+                  <div
                     key={img.id}
-                    href={img.src}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block overflow-hidden rounded-lg border border-primary-200 hover:border-primary-400 transition-colors max-w-full"
+                    className="block overflow-hidden rounded-lg border border-primary-200 max-w-full"
                   >
                     <img
                       src={img.src}
@@ -2789,7 +2887,7 @@ function MessageItemComponent({
                       className="max-h-64 w-auto max-w-full object-contain"
                       loading="lazy"
                     />
-                  </a>
+                  </div>
                 ))}
               </div>
             )}

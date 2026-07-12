@@ -1,104 +1,38 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto'
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 /**
- * Persistent session token store.
+ * Process-local session token store.
  *
- * Tokens are held in memory for fast lookup and persisted to a JSON file
- * so they survive server restarts.  This is safe for single-instance
- * deployments.  For multi-worker setups the file becomes a race-condition
- * window — in that case replace with Redis or a database.
- *
- * File location: ~/.hermes/workspace-sessions.json
+ * Raw bearer tokens are deliberately not persisted. A restart or password
+ * rotation invalidates every session. Durable multi-instance sessions need an
+ * authenticated principal/revocation store; owner-only plaintext JSON is not
+ * a substitute for one.
  */
-interface SessionStore {
-  tokens: Record<string, number> // token -> expiry unix-ms
+interface SessionRecord {
+  expiry: number
+  passwordBinding: Buffer
 }
 
-const STORE_FILE = join(
-  process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? join(homedir(), '.hermes'),
-  'workspace-sessions.json',
-)
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
+const SESSION_BINDING_KEY = randomBytes(32)
 
-function loadStore(): SessionStore {
-  try {
-    if (existsSync(STORE_FILE)) {
-      const raw = readFileSync(STORE_FILE, 'utf8')
-      const parsed = JSON.parse(raw) as SessionStore
-      // Expire any stale tokens on load
-      const now = Date.now()
-      const valid: Record<string, number> = {}
-      for (const [token, expiry] of Object.entries(parsed.tokens)) {
-        if (expiry > now) valid[token] = expiry
-      }
-      return { tokens: valid }
-    }
-  } catch {
-    // Corrupt store — start fresh
-  }
-  return { tokens: {} }
-}
-
-function saveStore(store: SessionStore): void {
-  try {
-    const dir = dirname(STORE_FILE)
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
-    }
-    // Write with restrictive permissions — tokens are sensitive.
-    writeFileSync(STORE_FILE, JSON.stringify(store), { encoding: 'utf8', mode: 0o600 })
-    // Enforce 0600 even if the file already existed with looser perms.
-    try {
-      chmodSync(STORE_FILE, 0o600)
-    } catch {
-      // chmod is best-effort (e.g. Windows) — ignore failures.
-    }
-  } catch {
-    // Non-fatal — tokens are still in memory.
-    console.warn(`[auth] Failed to persist session store to ${STORE_FILE}`)
-  }
-}
-
-// In-memory working copy
-const _tokens: Map<string, number> = new Map()
-
-// Hydrate from disk on module load
-const initial = loadStore()
-for (const [token, expiry] of Object.entries(initial.tokens)) {
-  _tokens.set(token, expiry)
-}
+const _tokens: Map<string, SessionRecord> = new Map()
 
 /**
- * Prune expired tokens from the store (called on every write + a periodic sweep).
+ * Prune expired tokens from the process-local store.
  */
 function _prune(): void {
   const now = Date.now()
-  let changed = false
-  for (const [token, expiry] of _tokens) {
-    if (expiry <= now) {
+  for (const [token, record] of _tokens) {
+    if (record.expiry <= now) {
       _tokens.delete(token)
-      changed = true
     }
   }
-  if (changed) _persist()
-}
-
-function _persist(): void {
-  const store: SessionStore = { tokens: Object.fromEntries(_tokens) }
-  saveStore(store)
 }
 
 // Sweep expired tokens every 10 minutes
-setInterval(_prune, 10 * 60 * 1000)
+const pruneTimer = setInterval(_prune, 10 * 60 * 1000)
+pruneTimer.unref()
 
 /**
  * Generate a cryptographically secure session token.
@@ -111,19 +45,28 @@ export function generateSessionToken(): string {
  * Store a session token as valid (30-day TTL).
  */
 export function storeSessionToken(token: string): void {
-  _tokens.set(token, Date.now() + TOKEN_TTL_MS)
-  _persist()
+  _tokens.set(token, {
+    expiry: Date.now() + TOKEN_TTL_MS,
+    passwordBinding: currentPasswordBinding(),
+  })
 }
 
 /**
  * Check if a session token is valid and not expired.
  */
 export function isValidSessionToken(token: string): boolean {
-  const expiry = _tokens.get(token)
-  if (expiry === undefined) return false
-  if (expiry <= Date.now()) {
+  const record = _tokens.get(token)
+  if (record === undefined) return false
+  if (record.expiry <= Date.now()) {
     _tokens.delete(token)
-    _persist()
+    return false
+  }
+  const currentBinding = currentPasswordBinding()
+  if (
+    currentBinding.length !== record.passwordBinding.length ||
+    !timingSafeEqual(currentBinding, record.passwordBinding)
+  ) {
+    _tokens.delete(token)
     return false
   }
   return true
@@ -134,7 +77,6 @@ export function isValidSessionToken(token: string): boolean {
  */
 export function revokeSessionToken(token: string): void {
   _tokens.delete(token)
-  _persist()
 }
 
 /**
@@ -145,10 +87,16 @@ export function revokeSessionToken(token: string): void {
  */
 function getConfiguredPassword(): string {
   const fromHermes = process.env.HERMES_PASSWORD
-  if (fromHermes && fromHermes.length > 0) return fromHermes
+  if (fromHermes && fromHermes.trim().length > 0) return fromHermes
   const fromClaude = process.env.CLAUDE_PASSWORD
-  if (fromClaude && fromClaude.length > 0) return fromClaude
+  if (fromClaude && fromClaude.trim().length > 0) return fromClaude
   return ''
+}
+
+function currentPasswordBinding(): Buffer {
+  return createHmac('sha256', SESSION_BINDING_KEY)
+    .update(getConfiguredPassword(), 'utf8')
+    .digest()
 }
 
 /**

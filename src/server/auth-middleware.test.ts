@@ -17,6 +17,7 @@ afterEach(() => {
   delete process.env.COOKIE_SECURE
   delete process.env.NODE_ENV
   delete process.env.TRUST_PROXY
+  delete process.env.HERMES_PASSWORD
   delete process.env.CLAUDE_PASSWORD
 })
 
@@ -93,5 +94,30 @@ describe('getRequestIp (#125)', () => {
     const { getRequestIp } = await import('./auth-middleware')
     const ip = getRequestIp(makeRequest({ 'x-real-ip': '198.51.100.5' }))
     expect(ip).toBe('198.51.100.5')
+  })
+})
+
+describe('password-backed session containment', () => {
+  it('treats whitespace-only HERMES_PASSWORD as absent and uses a valid legacy fallback', async () => {
+    process.env.HERMES_PASSWORD = '   '
+    process.env.CLAUDE_PASSWORD = 'legacy-password'
+    const { isPasswordProtectionEnabled, verifyPassword } = await import(
+      './auth-middleware'
+    )
+    expect(isPasswordProtectionEnabled()).toBe(true)
+    expect(verifyPassword('legacy-password')).toBe(true)
+    expect(verifyPassword('   ')).toBe(false)
+  })
+
+  it('invalidates an existing session when the configured password rotates', async () => {
+    process.env.HERMES_PASSWORD = 'first-password'
+    const { isValidSessionToken, storeSessionToken } = await import(
+      './auth-middleware'
+    )
+    storeSessionToken('rotation-test-token')
+    expect(isValidSessionToken('rotation-test-token')).toBe(true)
+
+    process.env.HERMES_PASSWORD = 'second-password'
+    expect(isValidSessionToken('rotation-test-token')).toBe(false)
   })
 })

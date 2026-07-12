@@ -3,22 +3,35 @@ import {
   ArrowDown01Icon,
   ArrowUp01Icon,
   Copy01Icon,
-  Link01Icon,
   RefreshIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { AnimatePresence, motion } from 'motion/react'
+import type { Components } from 'react-markdown'
+import type {
+  AgentOutput,
+  AgentOutputFilter,
+} from '@/hooks/use-agent-outputs'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/prompt-kit/markdown'
 import { toast } from '@/components/ui/toast'
 import { runCronJob } from '@/lib/cron-api'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime } from '@/screens/dashboard/lib/formatters'
-import {
-  useAgentOutputs,
-  type AgentOutput,
-  type AgentOutputFilter,
-} from '@/hooks/use-agent-outputs'
+import { useAgentOutputs } from '@/hooks/use-agent-outputs'
+
+const INERT_AGENT_OUTPUT_MARKDOWN_COMPONENTS = {
+  a: ({ children, href }) => (
+    <span className="underline decoration-primary-300" title={href}>
+      {children}
+    </span>
+  ),
+  img: ({ alt, src }) => (
+    <span className="font-mono text-xs" title={src}>
+      [image reference: {alt || 'unnamed'}]
+    </span>
+  ),
+} satisfies Partial<Components>
 
 function formatDuration(durationMs?: number) {
   if (!durationMs || durationMs <= 0) return null
@@ -220,7 +233,9 @@ function OutputCard({ output }: { output: AgentOutput }) {
 
         <div className="overflow-hidden rounded-[1.1rem] border border-[var(--theme-border)] bg-[var(--theme-card)]/75 px-4 py-3">
           <div className={cn('relative', !expanded && 'max-h-[8.5rem] overflow-hidden')}>
-            <Markdown>{output.fullOutput}</Markdown>
+            <Markdown components={INERT_AGENT_OUTPUT_MARKDOWN_COMPONENTS}>
+              {output.fullOutput}
+            </Markdown>
             {!expanded ? (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-white to-transparent" />
             ) : null}
@@ -287,10 +302,10 @@ function OutputCard({ output }: { output: AgentOutput }) {
           <Button
             variant="secondary"
             className="border border-[var(--theme-border)] bg-[var(--theme-card)] text-[var(--theme-text)] hover:bg-[var(--theme-card2)]"
-            onClick={() => window.open(sourceUrl, '_blank', 'noopener,noreferrer')}
+            onClick={() => void copyText(sourceUrl, 'Link')}
           >
-            <HugeiconsIcon icon={Link01Icon} size={16} strokeWidth={1.8} />
-            Link
+            <HugeiconsIcon icon={Copy01Icon} size={16} strokeWidth={1.8} />
+            Copy link
           </Button>
         ) : null}
 

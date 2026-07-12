@@ -48,6 +48,9 @@ COPY --from=build --chown=workspace:workspace /app/dist ./dist
 COPY --from=build --chown=workspace:workspace /app/node_modules ./node_modules
 COPY --from=build --chown=workspace:workspace /app/package.json ./package.json
 COPY --from=build --chown=workspace:workspace /app/server-entry.js ./server-entry.js
+COPY --from=build --chown=workspace:workspace /app/server/request-body-limit.cjs ./server/request-body-limit.cjs
+COPY --from=build --chown=workspace:workspace /app/server/response-header-policy.cjs ./server/response-header-policy.cjs
+COPY --from=build --chown=workspace:workspace /app/server/static-file-policy.cjs ./server/static-file-policy.cjs
 COPY --from=build --chown=workspace:workspace /app/skills ./skills
 COPY --chown=workspace:workspace docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 

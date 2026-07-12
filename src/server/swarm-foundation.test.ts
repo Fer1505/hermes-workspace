@@ -1,3 +1,6 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildSwarmDispatchMetadata,
@@ -7,10 +10,9 @@ import {
   getSwarmWrapperPath,
   normalizeSwarmRuntime,
   parseSwarmPluginManifest,
+  patchSwarmRuntimeFile,
+  readSwarmRuntimeFile,
 } from './swarm-foundation'
-import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
 
 describe('normalizeSwarmRuntime', () => {
   it('resolves semantic wrapper aliases from the roster', () => {
@@ -41,6 +43,48 @@ describe('normalizeSwarmRuntime', () => {
     expect(runtime.tasks).toEqual([])
     expect(runtime.artifacts).toEqual([])
     expect(runtime.previews).toEqual([])
+  })
+
+  it('quarantines runtime preview URLs while retaining inert label and status text', () => {
+    const previewUrls = [
+      'javascript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'blob:http://localhost:5173/private-id',
+      './relative-preview',
+      'http://localhost:5173/private',
+      'http://127.0.0.1:5173/private',
+      'https://example.test/preview',
+    ]
+    const runtime = normalizeSwarmRuntime(
+      'builder',
+      {
+        previews: previewUrls.map((url, index) => ({
+          id: `caller-controlled-${index}`,
+          label: `Generated preview ${index}`,
+          url,
+          source: 'plugin',
+          status: 'ready',
+          updatedAt: 1234 + index,
+        })),
+      },
+      { workspaceRoot: '/tmp' },
+    )
+
+    expect(runtime.previews).toHaveLength(previewUrls.length)
+    runtime.previews.forEach((preview, index) => {
+      expect(preview).toEqual({
+        id: `builder-preview-${index}`,
+        label: `Generated preview ${index}`,
+        url: '',
+        source: 'runtime',
+        status: 'ready',
+        workerId: 'builder',
+        updatedAt: null,
+      })
+    })
+    const serialized = JSON.stringify(runtime.previews)
+    previewUrls.forEach((url) => expect(serialized).not.toContain(url))
+    expect(serialized).not.toContain('caller-controlled-')
   })
 })
 
@@ -161,8 +205,6 @@ describe('parseSwarmPluginManifest', () => {
     }
   })
 })
-
-import { patchSwarmRuntimeFile, readSwarmRuntimeFile } from './swarm-foundation'
 
 describe('patchSwarmRuntimeFile', () => {
   it('returns ok=false when the profile path does not exist', () => {

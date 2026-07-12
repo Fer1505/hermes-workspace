@@ -53,6 +53,10 @@ import { Button } from '@/components/ui/button'
 import { usePinnedModels } from '@/hooks/use-pinned-models'
 // import { ModeSelector } from '@/components/mode-selector'
 import { cn } from '@/lib/utils'
+import {
+  isSafeRasterMime,
+  isSafeRasterName,
+} from '@/lib/generated-content-containment'
 import { useVoiceInput } from '@/hooks/use-voice-input'
 import { useVoiceRecorder } from '@/hooks/use-voice-recorder'
 import { toast } from '@/components/ui/toast'
@@ -416,12 +420,8 @@ const IMAGE_EXTENSION_TO_MIME: Record<string, string> = {
   gif: 'image/gif',
   webp: 'image/webp',
   bmp: 'image/bmp',
-  svg: 'image/svg+xml',
   avif: 'image/avif',
-  heic: 'image/heic',
-  heif: 'image/heif',
-  tif: 'image/tiff',
-  tiff: 'image/tiff',
+  ico: 'image/x-icon',
 }
 
 const TEXT_EXTENSION_TO_MIME: Record<string, string> = {
@@ -440,8 +440,7 @@ function normalizeMimeType(value: string): string {
 }
 
 function isImageMimeType(value: string): boolean {
-  const normalized = normalizeMimeType(value)
-  return normalized.startsWith('image/')
+  return isSafeRasterMime(value)
 }
 
 function inferImageMimeTypeFromFileName(name: string): string {
@@ -462,8 +461,8 @@ function isTextMimeType(value: string): boolean {
 }
 
 function isImageFile(file: File): boolean {
-  if (isImageMimeType(file.type)) return true
-  return inferImageMimeTypeFromFileName(file.name).length > 0
+  if (!isSafeRasterName(file.name)) return false
+  return file.type.trim().length === 0 || isImageMimeType(file.type)
 }
 
 function isTextFile(file: File): boolean {
@@ -624,6 +623,40 @@ function estimateDataUrlBytes(dataUrl: string): number {
 function readDataUrlMimeType(dataUrl: string): string | null {
   const match = /^data:([^;]+);base64,/.exec(dataUrl)
   return match?.[1]?.trim() || null
+}
+
+function claimsImageAttachment(attachment: ChatComposerAttachment): boolean {
+  return (
+    attachment.kind === 'image' ||
+    attachment.contentType.trim().toLowerCase().startsWith('image/')
+  )
+}
+
+export function isExplicitSafeRasterComposerAttachment(
+  attachment: ChatComposerAttachment,
+): boolean {
+  const contentMime = normalizeMimeType(attachment.contentType)
+  const dataMime = readDataUrlMimeType(attachment.dataUrl || '') || ''
+  const previewMime = attachment.previewUrl
+    ? readDataUrlMimeType(attachment.previewUrl) || ''
+    : contentMime
+  return (
+    isSafeRasterName(attachment.name) &&
+    isSafeRasterMime(contentMime) &&
+    isSafeRasterMime(dataMime) &&
+    isSafeRasterMime(previewMime) &&
+    dataMime === contentMime &&
+    previewMime === contentMime
+  )
+}
+
+function keepContainedComposerAttachment(
+  attachment: ChatComposerAttachment,
+): boolean {
+  return (
+    !claimsImageAttachment(attachment) ||
+    isExplicitSafeRasterComposerAttachment(attachment)
+  )
 }
 
 async function compressImageToDataUrl(file: File): Promise<string> {
@@ -1340,6 +1373,7 @@ function ChatComposerComponent({
     if (
       !isModelMenuOpen &&
       !isProfileMenuOpen &&
+      !isWorkspaceMenuOpen &&
       !isThinkingMenuOpen &&
       !isControlsMenuOpen
     )
@@ -1349,11 +1383,13 @@ function ChatComposerComponent({
       if (controlsMenuRef.current?.contains(target)) return
       if (modelSelectorRef.current?.contains(target)) return
       if (profileMenuRef.current?.contains(target)) return
+      if (workspaceMenuRef.current?.contains(target)) return
       if (thinkingMenuRef.current?.contains(target)) return
       setIsControlsMenuOpen(false)
       setIsModelMenuOpen(false)
       setIsProviderSwitcherExpanded(false)
       setIsProfileMenuOpen(false)
+      setIsWorkspaceMenuOpen(false)
       setIsThinkingMenuOpen(false)
     }
 
@@ -1364,6 +1400,7 @@ function ChatComposerComponent({
   }, [
     isModelMenuOpen,
     isProfileMenuOpen,
+    isWorkspaceMenuOpen,
     isThinkingMenuOpen,
     isControlsMenuOpen,
   ])
@@ -1418,7 +1455,7 @@ function ChatComposerComponent({
 
   const setComposerAttachments = useCallback(
     (nextAttachments: Array<ChatComposerAttachment>) => {
-      setAttachments(nextAttachments)
+      setAttachments(nextAttachments.filter(keepContainedComposerAttachment))
       focusPrompt()
     },
     [focusPrompt],
@@ -1635,11 +1672,13 @@ function ChatComposerComponent({
       return
     }
     const body = value.trim()
-    if (body.length === 0 && attachments.length === 0) return
+    const attachmentPayload = attachments
+      .filter(keepContainedComposerAttachment)
+      .map((attachment) => ({
+        ...attachment,
+      }))
+    if (body.length === 0 && attachmentPayload.length === 0) return
     submittingRef.current = true
-    const attachmentPayload = attachments.map((attachment) => ({
-      ...attachment,
-    }))
     try {
       // Fast mode is incompatible with extended thinking — disable if thinking is on
       const effectiveFastMode =
@@ -2154,7 +2193,7 @@ function ChatComposerComponent({
       <input
         ref={attachmentInputRef}
         type="file"
-        accept="image/*,.md,.txt,.json,.csv,.ts,.tsx,.js,.py"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/x-icon,image/vnd.microsoft.icon,image/avif,.png,.jpg,.jpeg,.gif,.webp,.bmp,.ico,.avif,.md,.txt,.json,.csv,.ts,.tsx,.js,.py"
         multiple
         className="hidden"
         onChange={handleAttachmentInputChange}
@@ -2202,7 +2241,7 @@ function ChatComposerComponent({
               {attachments.map((attachment) => {
                 const isImageAttachment =
                   Boolean(attachment.previewUrl) &&
-                  isImageMimeType(attachment.contentType)
+                  isExplicitSafeRasterComposerAttachment(attachment)
 
                 return (
                   <div
@@ -2794,6 +2833,7 @@ function ChatComposerComponent({
                       onClick={() => {
                         setIsControlsMenuOpen((open) => !open)
                         setIsProfileMenuOpen(false)
+                        setIsWorkspaceMenuOpen(false)
                         setIsThinkingMenuOpen(false)
                         setIsModelMenuOpen(false)
                       }}
@@ -2836,6 +2876,7 @@ function ChatComposerComponent({
                               type="button"
                               onClick={() => {
                                 setIsProfileMenuOpen((open) => !open)
+                                setIsWorkspaceMenuOpen(false)
                                 setIsThinkingMenuOpen(false)
                                 setIsModelMenuOpen(false)
                               }}
@@ -2894,6 +2935,106 @@ function ChatComposerComponent({
 
                           <div
                             className="relative flex min-w-0 items-center"
+                            ref={workspaceMenuRef}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsWorkspaceMenuOpen((open) => !open)
+                                setIsProfileMenuOpen(false)
+                                setIsThinkingMenuOpen(false)
+                                setIsModelMenuOpen(false)
+                              }}
+                              disabled={disabled || workspaceSelectMutation.isPending}
+                              className="inline-flex h-8 max-w-[9rem] items-center gap-1.5 rounded-full bg-primary-100/70 px-2.5 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-200/80 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-primary-800/60"
+                              title={detectedWorkspacePath || 'Workspace context'}
+                            >
+                              <svg
+                                width="13"
+                                height="13"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                              </svg>
+                              <span className="truncate">{workspaceButtonLabel}</span>
+                              <HugeiconsIcon icon={ArrowDown01Icon} size={11} />
+                            </button>
+                            {isWorkspaceMenuOpen && (
+                              <div className="absolute bottom-full left-0 z-[200] mb-2 min-w-[19rem] overflow-hidden rounded-xl border border-neutral-200 bg-white p-1 shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-150 dark:border-neutral-700 dark:bg-neutral-900">
+                                <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+                                  Workspace context
+                                </div>
+                                <div className="max-h-56 overflow-y-auto">
+                                  {workspaceEntries.length > 0 ? (
+                                    workspaceEntries.map((workspace) => {
+                                      const selected =
+                                        workspace.path === detectedWorkspacePath
+                                      return (
+                                        <button
+                                          key={workspace.path}
+                                          type="button"
+                                          onClick={() => {
+                                            if (selected) {
+                                              setIsWorkspaceMenuOpen(false)
+                                              return
+                                            }
+                                            workspaceSelectMutation.mutate(workspace)
+                                          }}
+                                          className={cn(
+                                            'flex w-full flex-col rounded-lg px-3 py-2 text-left text-sm transition-colors',
+                                            selected
+                                              ? 'bg-neutral-100 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-50'
+                                              : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-300 dark:hover:bg-neutral-800/60',
+                                          )}
+                                        >
+                                          <span className="flex items-center gap-2">
+                                            <span className="truncate font-medium">
+                                              {workspace.name ||
+                                                shortPathLabel(workspace.path)}
+                                            </span>
+                                            {selected ? (
+                                              <span className="text-[10px] text-accent-500">
+                                                active
+                                              </span>
+                                            ) : null}
+                                          </span>
+                                          <span className="mt-0.5 max-w-[16rem] truncate font-mono text-[11px] text-neutral-500">
+                                            {workspace.path}
+                                          </span>
+                                        </button>
+                                      )
+                                    })
+                                  ) : (
+                                    <div className="px-3 py-2 text-xs text-neutral-500">
+                                      No valid workspaces detected
+                                    </div>
+                                  )}
+                                </div>
+                                {workspaceContextQuery.isError ? (
+                                  <div className="px-3 py-2 text-xs text-red-500">
+                                    Failed to load workspaces
+                                  </div>
+                                ) : null}
+                                <div className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />
+                                <button
+                                  type="button"
+                                  onClick={handleOpenWorkspaceManager}
+                                  className="w-full rounded-lg px-3 py-2 text-left text-sm text-neutral-700 transition-colors hover:bg-neutral-50 dark:text-neutral-300 dark:hover:bg-neutral-800/60"
+                                >
+                                  Show files sidebar…
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          <div
+                            className="relative flex min-w-0 items-center"
                             ref={thinkingMenuRef}
                           >
                             <button
@@ -2901,6 +3042,7 @@ function ChatComposerComponent({
                               onClick={() => {
                                 setIsThinkingMenuOpen((open) => !open)
                                 setIsProfileMenuOpen(false)
+                                setIsWorkspaceMenuOpen(false)
                                 setIsModelMenuOpen(false)
                               }}
                               className={cn(
@@ -2952,6 +3094,7 @@ function ChatComposerComponent({
                               onClick={() => {
                                 setIsModelMenuOpen((prev) => !prev)
                                 setIsProfileMenuOpen(false)
+                                setIsWorkspaceMenuOpen(false)
                                 setIsThinkingMenuOpen(false)
                               }}
                               disabled={isModelSwitcherDisabled}

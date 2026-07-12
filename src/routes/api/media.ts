@@ -9,6 +9,12 @@ import { readFileSync, statSync } from 'node:fs'
 import os from 'node:os'
 import { extname, isAbsolute, resolve as resolvePath } from 'node:path'
 import { createFileRoute } from '@tanstack/react-router'
+import {
+  GENERATED_CONTENT_CONTAINMENT_REASON,
+  isExecutableGeneratedContentName,
+  isSafeRasterMime,
+  isSafeRasterName,
+} from '../../lib/generated-content-containment'
 import { requireLocalOrAuth } from '../../server/auth-middleware'
 
 const MAX_BYTES = 10 * 1024 * 1024
@@ -21,7 +27,7 @@ const MIME_BY_EXT: Record<string, string> = {
   '.webp': 'image/webp',
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
-  '.svg': 'image/svg+xml',
+  '.avif': 'image/avif',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.mp3': 'audio/mpeg',
@@ -60,7 +66,7 @@ function isAllowed(absPath: string): boolean {
 export const Route = createFileRoute('/api/media')({
   server: {
     handlers: {
-      GET: async ({ request }) => {
+      GET: ({ request }) => {
         if (!requireLocalOrAuth(request)) {
           return new Response('Unauthorized', { status: 401 })
         }
@@ -69,6 +75,18 @@ export const Route = createFileRoute('/api/media')({
           const url = new URL(request.url)
           const rawPath = url.searchParams.get('path')?.trim() ?? ''
           if (!rawPath) return new Response('path required', { status: 400 })
+          if (isExecutableGeneratedContentName(rawPath)) {
+            return new Response(GENERATED_CONTENT_CONTAINMENT_REASON, {
+              status: 415,
+              headers: {
+                'Cache-Control': 'no-store',
+                'Content-Security-Policy': "default-src 'none'; sandbox",
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Referrer-Policy': 'no-referrer',
+                'X-Content-Type-Options': 'nosniff',
+              },
+            })
+          }
           if (!isAbsolute(rawPath)) {
             return new Response('Only absolute paths are accepted', { status: 400 })
           }
@@ -81,6 +99,12 @@ export const Route = createFileRoute('/api/media')({
           const ext = extname(absPath).toLowerCase()
           const contentType = MIME_BY_EXT[ext]
           if (!contentType) {
+            return new Response('Unsupported media type', { status: 415 })
+          }
+          if (
+            contentType.startsWith('image/') &&
+            (!isSafeRasterName(absPath) || !isSafeRasterMime(contentType))
+          ) {
             return new Response('Unsupported media type', { status: 415 })
           }
 

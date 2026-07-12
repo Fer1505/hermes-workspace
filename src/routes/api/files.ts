@@ -5,9 +5,21 @@ import { promisify } from 'node:util'
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import {
+  GENERATED_CONTENT_CONTAINMENT_REASON,
+  isExecutableGeneratedContentMime,
+  isExecutableGeneratedContentName,
+  isSafeRasterMime,
+  isSafeRasterName,
+} from '../../lib/generated-content-containment'
+import {
   isAuthenticated,
   requireLocalOrAuth,
 } from '../../server/auth-middleware'
+import {
+  SERVED_ROOT_WRITE_CONTAINMENT_REASON,
+  ServedRootWriteDeniedError,
+  assertNotApplicationServedRootMutation,
+} from '../../server/served-root-write-policy'
 import {
   getClientIp,
   rateLimit,
@@ -234,6 +246,12 @@ function getMimeType(filePath: string) {
       return 'image/gif'
     case '.webp':
       return 'image/webp'
+    case '.bmp':
+      return 'image/bmp'
+    case '.ico':
+      return 'image/x-icon'
+    case '.avif':
+      return 'image/avif'
     case '.svg':
       return 'image/svg+xml'
     case '.pdf':
@@ -262,8 +280,25 @@ function getMimeType(filePath: string) {
 }
 
 function isImageFile(filePath: string) {
-  const ext = path.extname(filePath).toLowerCase()
-  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)
+  const mime = getMimeType(filePath)
+  if (
+    isExecutableGeneratedContentName(filePath) ||
+    isExecutableGeneratedContentMime(mime)
+  ) {
+    return false
+  }
+  return isSafeRasterName(filePath) && isSafeRasterMime(mime)
+}
+
+const CONTENT_RESPONSE_HEADERS = {
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': "default-src 'none'; sandbox",
+  'Referrer-Policy': 'no-referrer',
+  'X-Content-Type-Options': 'nosniff',
+} as const
+
+function attachmentFilename(filePath: string): string {
+  return path.basename(filePath).replace(/["\\\r\n]/g, '_')
 }
 
 export const Route = createFileRoute('/api/files')({
@@ -276,6 +311,17 @@ export const Route = createFileRoute('/api/files')({
         try {
           const url = new URL(request.url)
           const action = url.searchParams.get('action') || 'list'
+
+          if (action === 'view') {
+            return new Response(GENERATED_CONTENT_CONTAINMENT_REASON, {
+              status: 410,
+              headers: {
+                ...CONTENT_RESPONSE_HEADERS,
+                'Content-Type': 'text/plain; charset=utf-8',
+              },
+            })
+          }
+
           const inputPath = url.searchParams.get('path') || ''
           const maxDepthParam = parseMaxDepth(url.searchParams.get('maxDepth'))
           const maxEntriesParam = parseMaxEntries(
@@ -315,18 +361,17 @@ export const Route = createFileRoute('/api/files')({
             })
           }
 
-          if (action === 'download' || action === 'view') {
+          if (action === 'download') {
             const buffer = await fs.readFile(resolvedPath)
             const mime = getMimeType(resolvedPath)
             const headers: Record<string, string> = {
+              ...CONTENT_RESPONSE_HEADERS,
               'Content-Type':
-                action === 'view' && mime === 'application/octet-stream'
-                  ? 'text/plain; charset=utf-8'
+                isExecutableGeneratedContentName(resolvedPath) ||
+                isExecutableGeneratedContentMime(mime)
+                  ? 'application/octet-stream'
                   : mime,
-            }
-            if (action === 'download') {
-              headers['Content-Disposition'] =
-                `attachment; filename="${path.basename(resolvedPath)}"`
+              'Content-Disposition': `attachment; filename="${attachmentFilename(resolvedPath)}"`,
             }
             return new Response(buffer, { headers })
           }
@@ -382,6 +427,7 @@ export const Route = createFileRoute('/api/files')({
               ? path.join(resolvedTarget, path.basename(file.name))
               : resolvedTarget
             ensureWorkspacePath(destination, workspaceRoot)
+            await assertNotApplicationServedRootMutation(destination)
             await fs.mkdir(path.dirname(destination), { recursive: true })
             const buffer = Buffer.from(await file.arrayBuffer())
             await fs.writeFile(destination, buffer)
@@ -402,6 +448,7 @@ export const Route = createFileRoute('/api/files')({
               String(body.path || ''),
               workspaceRoot,
             )
+            await assertNotApplicationServedRootMutation(dirPath)
             await fs.mkdir(dirPath, { recursive: true })
             return json({ ok: true, path: toRelative(dirPath, workspaceRoot) })
           }
@@ -415,6 +462,10 @@ export const Route = createFileRoute('/api/files')({
               String(body.to || ''),
               workspaceRoot,
             )
+            await Promise.all([
+              assertNotApplicationServedRootMutation(fromPath),
+              assertNotApplicationServedRootMutation(toPath),
+            ])
             await fs.mkdir(path.dirname(toPath), { recursive: true })
             await fs.rename(fromPath, toPath)
             return json({ ok: true, path: toRelative(toPath, workspaceRoot) })
@@ -428,6 +479,7 @@ export const Route = createFileRoute('/api/files')({
               String(body.path || ''),
               workspaceRoot,
             )
+            await assertNotApplicationServedRootMutation(targetPath)
             try {
               // Try macOS trash command first
               await execFileAsync('trash', [targetPath])
@@ -442,11 +494,21 @@ export const Route = createFileRoute('/api/files')({
             String(body.path || ''),
             workspaceRoot,
           )
+          await assertNotApplicationServedRootMutation(filePath)
           const content = typeof body.content === 'string' ? body.content : ''
           await fs.mkdir(path.dirname(filePath), { recursive: true })
           await fs.writeFile(filePath, content, 'utf8')
           return json({ ok: true, path: toRelative(filePath, workspaceRoot) })
         } catch (err) {
+          if (err instanceof ServedRootWriteDeniedError) {
+            return json(
+              {
+                ok: false,
+                error: SERVED_ROOT_WRITE_CONTAINMENT_REASON,
+              },
+              { status: 403 },
+            )
+          }
           return json({ error: safeErrorMessage(err) }, { status: 500 })
         }
       },

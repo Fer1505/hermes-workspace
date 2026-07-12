@@ -1,8 +1,24 @@
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
-import { join, extname } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import server from './dist/server/server.js'
+import requestBodyLimit from './server/request-body-limit.cjs'
+import responseHeaderPolicy from './server/response-header-policy.cjs'
+import staticFilePolicy from './server/static-file-policy.cjs'
+
+const {
+  MAX_REQUEST_BODY_BYTES,
+  readBoundedRequestBody,
+  RequestBodyTooLargeError,
+} = requestBodyLimit
+const { mergeResponseSecurityHeaders } = responseHeaderPolicy
+const {
+  STATIC_FILE_CONTAINMENT_REASON,
+  STATIC_FILE_DENIAL_HEADERS,
+  classifyStaticRequest,
+  resolveContainedStaticPath,
+} = staticFilePolicy
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const CLIENT_DIR = join(__dirname, 'dist', 'client')
@@ -113,88 +129,52 @@ if (isNonLoopbackHost(host)) {
   }
 }
 
-const MIME_TYPES = {
-  '.js': 'application/javascript',
-  '.mjs': 'application/javascript',
-  '.css': 'text/css',
-  '.html': 'text/html',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-  '.ico': 'image/x-icon',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.eot': 'application/vnd.ms-fontobject',
-  '.map': 'application/json',
-  '.txt': 'text/plain',
-  '.xml': 'application/xml',
-  '.webmanifest': 'application/manifest+json',
+function endStaticDenial(req, res, classification) {
+  const reason = classification.reason || STATIC_FILE_CONTAINMENT_REASON
+  res.writeHead(classification.status || 404, {
+    ...STATIC_FILE_DENIAL_HEADERS,
+    'Content-Length': Buffer.byteLength(reason),
+  })
+  res.end(req.method === 'HEAD' ? undefined : reason)
 }
 
 async function tryServeStatic(req, res) {
-  const url = new URL(
-    req.url || '/',
-    `http://${req.headers.host || 'localhost'}`,
-  )
-  const pathname = decodeURIComponent(url.pathname)
-
-  // Prevent directory traversal
-  if (pathname.includes('..')) return false
-
-  // Asset requests should never fall through to the SSR handler. If a browser
-  // asks for a stale hashed JS/CSS chunk after a deploy or branch switch,
-  // returning the HTML shell with 200 text/html makes the SPA fail as a black
-  // screen. Return a real 404 instead so clients reload/recover correctly and
-  // health checks can detect the broken asset reference.
-  if (pathname.startsWith('/assets/')) {
-    const filePath = join(CLIENT_DIR, pathname)
-    if (!filePath.startsWith(CLIENT_DIR)) return false
-    try {
-      const fileStat = await stat(filePath)
-      if (!fileStat.isFile()) throw new Error('not a file')
-    } catch {
-      res.writeHead(404, {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-      })
-      res.end('Asset not found')
-      return true
-    }
+  const classification = classifyStaticRequest(req.url || '/', req.method)
+  if (classification.action === 'app') return false
+  if (classification.action === 'deny') {
+    endStaticDenial(req, res, classification)
+    return true
   }
 
-  const filePath = join(CLIENT_DIR, pathname)
-
-  // Make sure the resolved path is within CLIENT_DIR
-  if (!filePath.startsWith(CLIENT_DIR)) return false
+  const filePath = resolveContainedStaticPath(
+    CLIENT_DIR,
+    classification.pathname,
+  )
+  if (!filePath) {
+    endStaticDenial(req, res, classification)
+    return true
+  }
 
   try {
     const fileStat = await stat(filePath)
-    if (!fileStat.isFile()) return false
-
-    const ext = extname(filePath).toLowerCase()
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream'
-    const data = await readFile(filePath)
+    if (!fileStat.isFile()) throw new Error('not a file')
+    const data = req.method === 'HEAD' ? null : await readFile(filePath)
 
     const headers = {
-      'Content-Type': contentType,
-      'Content-Length': data.length,
-    }
-
-    // Cache hashed assets aggressively (they have content hashes in filenames)
-    if (pathname.startsWith('/assets/')) {
-      headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+      ...classification.headers,
+      'Content-Type': classification.contentType,
+      'Content-Length': data?.length ?? fileStat.size,
+      'Cache-Control': classification.immutable
+        ? 'public, max-age=31536000, immutable'
+        : 'no-store',
     }
 
     res.writeHead(200, headers)
-    res.end(data)
+    res.end(data || undefined)
     return true
   } catch {
-    return false
+    endStaticDenial(req, res, classification)
+    return true
   }
 }
 
@@ -218,11 +198,25 @@ async function requestHandler(req, res) {
 
   let body = null
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    body = await new Promise((resolve) => {
-      const chunks = []
-      req.on('data', (chunk) => chunks.push(chunk))
-      req.on('end', () => resolve(Buffer.concat(chunks)))
-    })
+    try {
+      body = await readBoundedRequestBody(req, MAX_REQUEST_BODY_BYTES)
+    } catch (error) {
+      const tooLarge = error instanceof RequestBodyTooLargeError
+      const status = tooLarge ? 413 : 400
+      res.writeHead(status, {
+        ...ALWAYS_HEADERS,
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+        Connection: 'close',
+      })
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: tooLarge ? 'Request body too large' : 'Invalid request body',
+        }),
+      )
+      return
+    }
   }
 
   const request = new Request(url.toString(), {
@@ -235,30 +229,20 @@ async function requestHandler(req, res) {
   try {
     const response = await server.fetch(request)
 
-    // Merge ALWAYS_HEADERS on top of the SSR-emitted headers. These MUST
-    // win — sending them here means the policy is observable even if the
-    // body got replaced by an edge-side JS Challenge or WAF response page.
-    const headers = Object.fromEntries(response.headers.entries())
-    for (const [name, value] of Object.entries(ALWAYS_HEADERS)) {
-      if (typeof value === 'string') headers[name] = value
-    }
-
-    // /api/* responses must NEVER be cacheable by intermediaries — the SPA
-    // uses /api/auth-check, /api/connection-status, etc. to decide whether
-    // to show the password form. Cloudflare's Browser Cache TTL default
-    // (7200s) is applied to any GET that doesn't say `no-store`, which
-    // caused the auth-check response to be served stale from the edge
-    // for ~2h after a fresh login, trapping the user in a password loop.
-    // Strip any Cache-Control/Pragma/Expires on API responses so the
-    // edge never reuses them. Hash-named assets keep their immutable
-    // header (set above in tryServeStatic) and are unaffected here
-    // because static assets short-circuit before this branch.
     const reqPathname = new URL(request.url).pathname
-    if (reqPathname.startsWith('/api/')) {
-      headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, private'
-      headers['Pragma'] = 'no-cache'
-      headers['Expires'] = '0'
-    }
+
+    // Keep the adapter defaults authoritative for pages while preserving the
+    // exact inert CSP/referrer pair deliberately emitted by /api/* generated-
+    // content boundaries. The merge also folds header names case-insensitively.
+    const headers = mergeResponseSecurityHeaders(
+      response.headers,
+      ALWAYS_HEADERS,
+      { isApi: reqPathname.startsWith('/api/') },
+    )
+
+    // The same case-insensitive merge also replaces any /api/* route cache
+    // fields with one exact no-store policy. Static assets short-circuit before
+    // this branch and retain their immutable headers.
 
     res.writeHead(response.status, headers)
 

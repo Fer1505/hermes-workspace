@@ -3,7 +3,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SHORTCUTS, shouldToggleKeyboardHelp } from './keyboard-shortcuts-overlay'
 import { DEFAULT_HERMESWORLD_SETTINGS, loadHermesWorldSettings, saveHermesWorldSettings } from './hermesworld-settings'
 
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    get length() {
+      return values.size
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, String(value)),
+  }
+}
+
 beforeEach(() => {
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: createMemoryStorage(),
+  })
   window.localStorage.clear()
   document.documentElement.style.removeProperty('--hermesworld-ui-scale')
   document.documentElement.style.removeProperty('--hermesworld-hud-opacity')

@@ -1,6 +1,57 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { GENERATED_CONTENT_CONTAINMENT_REASON } from '../../../lib/generated-content-containment'
 import { BEARER_TOKEN, CLAUDE_API } from '../../../server/gateway-capabilities'
 import { isAuthenticated } from '../../../server/auth-middleware'
+
+const INERT_PROXY_RESPONSE_HEADERS = {
+  'cache-control': 'no-store',
+  'content-security-policy': "default-src 'none'; sandbox",
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+} as const
+
+function normalizedMimeType(value: string | null): string {
+  return value?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+}
+
+export function isAllowedApiProxyResponseMime(value: string | null): boolean {
+  const mime = normalizedMimeType(value)
+  return (
+    isAllowedJsonApiProxyResponseMime(value) ||
+    mime === 'application/x-ndjson' ||
+    mime === 'application/json-seq' ||
+    mime === 'text/plain' ||
+    mime === 'text/event-stream'
+  )
+}
+
+function isAllowedJsonApiProxyResponseMime(value: string | null): boolean {
+  const mime = normalizedMimeType(value)
+  return (
+    mime === 'application/json' ||
+    (mime.startsWith('application/') && mime.endsWith('+json'))
+  )
+}
+
+function inertJsonProxyResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      ...INERT_PROXY_RESPONSE_HEADERS,
+      'content-type': 'application/json; charset=utf-8',
+    },
+  })
+}
+
+function blockedProxyContentTypeResponse(): Response {
+  return inertJsonProxyResponse(
+    {
+      ok: false,
+      error: GENERATED_CONTENT_CONTAINMENT_REASON,
+    },
+    502,
+  )
+}
 
 /**
  * Vanilla hermes-agent (any version through 2026-05) does not expose
@@ -15,38 +66,35 @@ async function fallbackAvailableModels(
 ): Promise<Response> {
   try {
     const res = await fetch(`${CLAUDE_API}/v1/models`, { headers: authHeaders })
-    if (!res.ok) {
-      return new Response(JSON.stringify({ models: [] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
+    if (
+      !res.ok ||
+      !isAllowedJsonApiProxyResponseMime(res.headers.get('content-type'))
+    ) {
+      return inertJsonProxyResponse({ models: [] })
     }
     const data = (await res.json()) as { data?: Array<Record<string, unknown>> }
-    const list = Array.isArray(data?.data) ? data.data : []
+    const list = Array.isArray(data.data) ? data.data : []
     const wanted = provider.toLowerCase()
     const models = list
       .map((m) => {
         const id = typeof m.id === 'string' ? m.id : ''
         if (!id) return null
-        const owned = typeof m.owned_by === 'string' ? m.owned_by.toLowerCase() : ''
-        const idProvider = id.includes('/') ? id.split('/')[0].toLowerCase() : owned
+        const owned =
+          typeof m.owned_by === 'string' ? m.owned_by.toLowerCase() : ''
+        const idProvider = id.includes('/')
+          ? id.split('/')[0].toLowerCase()
+          : owned
         if (wanted && idProvider !== wanted) return null
         return { id }
       })
       .filter((m): m is { id: string } => Boolean(m))
-    return new Response(JSON.stringify({ models }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })
+    return inertJsonProxyResponse({ models })
   } catch {
-    return new Response(JSON.stringify({ models: [] }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })
+    return inertJsonProxyResponse({ models: [] })
   }
 }
 
-async function proxyRequest(request: Request, splat: string) {
+export async function proxyRequest(request: Request, splat: string) {
   const incomingUrl = new URL(request.url)
   const targetPath = splat.startsWith('/') ? splat : `/${splat}`
   const targetUrl = new URL(`${CLAUDE_API}${targetPath}`)
@@ -84,10 +132,27 @@ async function proxyRequest(request: Request, splat: string) {
     return fallbackAvailableModels(provider, authHeaders)
   }
 
+  if (upstream.status === 204 || upstream.status === 205) {
+    return new Response(null, {
+      status: upstream.status,
+      headers: {
+        ...INERT_PROXY_RESPONSE_HEADERS,
+        'content-type': 'text/plain; charset=utf-8',
+      },
+    })
+  }
+
+  const contentType = upstream.headers.get('content-type')
+  if (!isAllowedApiProxyResponseMime(contentType)) {
+    return blockedProxyContentTypeResponse()
+  }
+
   const body = await upstream.text()
   const responseHeaders = new Headers()
-  const contentType = upstream.headers.get('content-type')
-  if (contentType) responseHeaders.set('content-type', contentType)
+  for (const [key, value] of Object.entries(INERT_PROXY_RESPONSE_HEADERS)) {
+    responseHeaders.set(key, value)
+  }
+  responseHeaders.set('content-type', contentType!)
   return new Response(body, {
     status: upstream.status,
     headers: responseHeaders,
@@ -99,36 +164,36 @@ export const Route = createFileRoute('/api/claude-proxy/$')({
     handlers: {
       GET: async ({ request, params }) => {
         if (!isAuthenticated(request)) {
-          return new Response(
-            JSON.stringify({ ok: false, error: 'Unauthorized' }),
-            { status: 401, headers: { 'content-type': 'application/json' } },
+          return inertJsonProxyResponse(
+            { ok: false, error: 'Unauthorized' },
+            401,
           )
         }
         return proxyRequest(request, params._splat || '')
       },
       POST: async ({ request, params }) => {
         if (!isAuthenticated(request)) {
-          return new Response(
-            JSON.stringify({ ok: false, error: 'Unauthorized' }),
-            { status: 401, headers: { 'content-type': 'application/json' } },
+          return inertJsonProxyResponse(
+            { ok: false, error: 'Unauthorized' },
+            401,
           )
         }
         return proxyRequest(request, params._splat || '')
       },
       PATCH: async ({ request, params }) => {
         if (!isAuthenticated(request)) {
-          return new Response(
-            JSON.stringify({ ok: false, error: 'Unauthorized' }),
-            { status: 401, headers: { 'content-type': 'application/json' } },
+          return inertJsonProxyResponse(
+            { ok: false, error: 'Unauthorized' },
+            401,
           )
         }
         return proxyRequest(request, params._splat || '')
       },
       DELETE: async ({ request, params }) => {
         if (!isAuthenticated(request)) {
-          return new Response(
-            JSON.stringify({ ok: false, error: 'Unauthorized' }),
-            { status: 401, headers: { 'content-type': 'application/json' } },
+          return inertJsonProxyResponse(
+            { ok: false, error: 'Unauthorized' },
+            401,
           )
         }
         return proxyRequest(request, params._splat || '')

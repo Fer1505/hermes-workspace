@@ -45,11 +45,11 @@ export const Route = createFileRoute('/api/swarm-lifecycle')({
         const workerId = workerIdMaybe
         if (action === 'request-handoff') {
           const result = await requestWorkerHandoff(workerId)
-          return json({ ok: result.ok, workerId, action, ...result })
+          return json({ ...result, ok: result.ok, workerId, action })
         }
         if (action === 'renew') {
           const result = await renewWorker(workerId)
-          return json({ ok: result.ok, workerId, action, ...result })
+          return json({ ...result, ok: result.ok, workerId, action })
         }
         if (action === 'notify-handoff-written') {
           notifyHandoffWritten(workerId)

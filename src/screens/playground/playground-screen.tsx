@@ -980,7 +980,7 @@ function TitleScreen({
               <span className="opacity-60">· Nous Research × Kimi</span>
             </div>
             <img
-              src="/assets/hermesworld/art/hermesworld-logo-horizontal.svg"
+              src="/assets/hermesworld/art/hermesworld-logo-horizontal.png"
               alt="HermesWorld"
               width={760}
               height={228}

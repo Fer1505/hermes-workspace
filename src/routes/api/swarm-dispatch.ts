@@ -210,10 +210,9 @@ export function buildHermesTmuxLaunchCommand(input: {
   ].filter(Boolean).join(' ')
   const hermesBin = shellEscapeSingle(input.hermesBin)
 
-  // Do not exec the Hermes process. Keeping the parent shell alive means a
-  // failed worker startup leaves a readable tmux pane instead of destroying the
-  // session and turning the real error into "can't find pane".
-  return `${launchPrefix} '${hermesBin}' chat --tui; status=$?; printf '\n[Hermes worker exited with status %s]\n' "$status"`
+  // Replace the shell so mission text can never fall through into a surviving
+  // command prompt if Hermes exits or fails to start.
+  return `${launchPrefix} exec '${hermesBin}' chat --tui`
 }
 
 function parseAssignments(value: unknown): Array<AssignmentRequest> {
@@ -601,17 +600,6 @@ function resolveWorkerCwd(workerId: string): string {
   return homedir()
 }
 
-async function captureTmuxPane(tmuxBin: string, sessionName: string): Promise<string> {
-  const captured = await execFileAsync(tmuxBin, ['capture-pane', '-p', '-t', sessionName, '-S', '-200'], 8_000)
-  return captured.ok ? captured.stdout.trim() : ''
-}
-
-function redactStartupOutput(output: string): string {
-  return output
-    .replace(/(sk-[A-Za-z0-9_-]{12,})/g, '[REDACTED]')
-    .replace(/(gh[pousr]_[A-Za-z0-9_]{12,})/g, '[REDACTED]')
-}
-
 async function ensureLiveTmuxSession(workerId: string): Promise<{ ok: true; tmuxBin: string; sessionName: string } | { ok: false; error: string }> {
   const tmuxBin = resolveTmuxBin()
   if (!tmuxBin) return { ok: false, error: 'tmux not installed' }
@@ -648,29 +636,12 @@ async function ensureLiveTmuxSession(workerId: string): Promise<{ ok: true; tmux
     return { ok: false, error: launched.error }
   }
 
-  // Give the agent a moment to render its prompt before sending keys. If Hermes
-  // exits immediately, the shell stays alive and prints a sentinel that lets us
-  // surface the real startup failure instead of a later tmux "can't find pane".
+  // Give the agent a moment to render its prompt before sending keys. Because
+  // the launch uses exec, startup failure closes the tmux session instead of
+  // exposing a reusable shell.
   await sleep(1200)
   if (!(await tmuxHasSession(tmuxBin, sessionName))) {
     return { ok: false, error: `Hermes worker tmux session ${sessionName} exited during startup` }
-  }
-
-  const startupOutput = await captureTmuxPane(tmuxBin, sessionName)
-  // Match only at the start of a line so the echoed shell command's printf
-  // format string doesn't trigger a false positive startup-failure sentinel.
-  const exitedPattern = /(?:^|\n)\[Hermes worker exited with status/
-  if (exitedPattern.test(startupOutput)) {
-    const sanitizedOutput = redactStartupOutput(startupOutput).slice(-4_000)
-    const logsDir = join(profilePath, 'logs')
-    mkdirSync(logsDir, { recursive: true })
-    const startupLogPath = join(logsDir, 'swarm-dispatch-startup.log')
-    writeFileSync(startupLogPath, `${new Date().toISOString()} ${sanitizedOutput}
-`, { flag: 'a' })
-    return {
-      ok: false,
-      error: `Hermes worker failed to start in tmux session ${sessionName}. Startup output saved to ${startupLogPath}: ${sanitizedOutput}`,
-    }
   }
 
   return { ok: true, tmuxBin, sessionName }
@@ -789,7 +760,28 @@ export function buildHermesChatQueryArgs(prompt: string): string[] {
   // Keeping the prompt adjacent to -q prevents argparse from interpreting
   // following flags (for example -Q) as a missing query and failing with:
   // "argument -q/--query: expected one argument".
-  return ['chat', '-q', prompt, '-Q', '--yolo', '--ignore-rules', '--source', 'swarm-dispatch']
+  return ['chat', '-q', prompt, '-Q', '--source', 'swarm-dispatch']
+}
+
+export function dispatchContainmentReason(input: {
+  assignmentCount: number
+  hasDependencies: boolean
+  reviewRequired: boolean
+  asyncRequested: boolean
+}): string | null {
+  if (input.assignmentCount !== 1) {
+    return 'Parallel swarm dispatch is paused by ORC-01 containment; submit exactly one assignment.'
+  }
+  if (input.hasDependencies) {
+    return 'Dependency-driven swarm dispatch is paused by ORC-01 containment.'
+  }
+  if (input.reviewRequired) {
+    return 'Review-required swarm dispatch is paused until authoritative review state is implemented.'
+  }
+  if (input.asyncRequested) {
+    return 'Asynchronous or no-checkpoint swarm dispatch is paused by ORC-01 containment.'
+  }
+  return null
 }
 
 function runWorker(assignment: AssignmentRequest, timeoutMs: number, roster: SwarmRosterWorker | undefined, options?: { waitForCheckpoint?: boolean; checkpointPollMs?: number; missionId?: string | null; notifySessionKey?: string | null }): Promise<WorkerResult> {
@@ -1073,14 +1065,29 @@ export async function dispatchSwarmAssignments(body: DispatchRequest) {
   if (assignments.length === 0) {
     throw new SwarmDispatchError('assignments[] or workerIds[] required')
   }
-  if (assignments.length > 12) {
-    throw new SwarmDispatchError('Maximum 12 workers per dispatch')
-  }
   if (assignments.some((assignment) => assignment.task.length === 0)) {
     throw new SwarmDispatchError('assignment task required')
   }
   if (assignments.some((assignment) => assignment.task.length > MAX_PROMPT_CHARS)) {
     throw new SwarmDispatchError(`assignment task exceeds ${MAX_PROMPT_CHARS} characters`)
+  }
+
+  const initialContainmentReason = dispatchContainmentReason({
+    assignmentCount: assignments.length,
+    hasDependencies: assignments.some((assignment) => Boolean(assignment.dependsOn?.length)),
+    reviewRequired: assignments.some((assignment) => assignment.reviewRequired === true),
+    asyncRequested: body.allowAsync === true || body.waitForCheckpoint === false,
+  })
+  if (initialContainmentReason) {
+    throw new SwarmDispatchError(initialContainmentReason, 409)
+  }
+
+  const roster = rosterByWorkerId(assignments.map((assignment) => assignment.workerId))
+  if (assignments.some((assignment) => roster.get(assignment.workerId)?.reviewRequired === true)) {
+    throw new SwarmDispatchError(
+      'Review-required worker dispatch is paused until authoritative review state is implemented.',
+      409,
+    )
   }
 
   const timeoutRaw = typeof body.timeoutSeconds === 'number' ? body.timeoutSeconds : DEFAULT_TIMEOUT_S
@@ -1123,7 +1130,6 @@ export async function dispatchSwarmAssignments(body: DispatchRequest) {
   }))
 
   const dispatchedAt = Date.now()
-  const roster = rosterByWorkerId(assignments.map((assignment) => assignment.workerId))
   const results = await Promise.all(assignments.map((assignment) => runWorker(
     assignment,
     timeoutMs,

@@ -45,7 +45,7 @@ export function HermesWorldEmbed() {
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(168,85,247,.24),transparent_48%),#050015]">
           <div className="flex flex-col items-center gap-3">
             <img
-              src="/hermesworld-logo.svg"
+              src="/assets/hermesworld/art/hermesworld-app-icon.png"
               alt="HermesWorld"
               className="h-14 w-14 animate-pulse rounded-2xl shadow-[0_0_34px_rgba(34,211,238,.25)]"
             />

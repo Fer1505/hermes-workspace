@@ -954,14 +954,12 @@ export function KnowledgeBrowserScreen() {
                           }
 
                           return (
-                            <a
-                              href={href}
-                              className="text-primary-950 underline decoration-primary-300 underline-offset-4 transition-colors hover:text-primary-950 hover:decoration-primary-500"
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <span
+                              className="text-primary-950 underline decoration-primary-300 underline-offset-4"
+                              title={href}
                             >
                               {children}
-                            </a>
+                            </span>
                           )
                         },
                       }}

@@ -4,10 +4,14 @@ import { createFileRoute } from '@tanstack/react-router'
 import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Download01Icon,
-  ExternalLink,
   Folder01Icon,
 } from '@hugeicons/core-free-icons'
-import { Markdown } from '@/components/prompt-kit/markdown'
+import type { FileEntry } from '@/components/file-explorer/file-explorer-sidebar'
+import { FileExplorerSidebar } from '@/components/file-explorer'
+import {
+  Markdown,
+  isSafeMarkdownImageSource,
+} from '@/components/prompt-kit/markdown'
 import {
   ScrollAreaCorner,
   ScrollAreaRoot,
@@ -16,9 +20,8 @@ import {
   ScrollAreaViewport,
 } from '@/components/ui/scroll-area'
 import { usePageTitle } from '@/hooks/use-page-title'
-import { FileExplorerSidebar } from '@/components/file-explorer'
-import type { FileEntry } from '@/components/file-explorer/file-explorer-sidebar'
 import { resolveTheme, useSettings } from '@/hooks/use-settings'
+import { isSafeRasterName } from '@/lib/generated-content-containment'
 
 const PLACEHOLDER_VALUE = `// Files workspace
 // Click a file in the tree to load it into this editor.
@@ -61,8 +64,6 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
   log: 'plaintext',
   txt: 'plaintext',
 }
-
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
 
 function getExt(name: string): string {
   const dot = name.lastIndexOf('.')
@@ -150,8 +151,7 @@ function FilesRoute() {
   }, [])
 
   const handleOpenFile = useCallback(async (entry: FileEntry) => {
-    const ext = getExt(entry.name)
-    const isImage = IMAGE_EXTS.has(ext)
+    const isImage = isSafeRasterName(entry.name)
     setLoaded({
       path: entry.path,
       name: entry.name,
@@ -177,7 +177,11 @@ function FilesRoute() {
         language: languageFor(entry.name),
         content: data.type === 'text' ? data.content : '',
         imageDataUrl:
-          data.type === 'image' || isImage ? data.content || null : null,
+          data.type === 'image' &&
+          isImage &&
+          isSafeMarkdownImageSource(data.content)
+            ? data.content || null
+            : null,
         loading: false,
         error: null,
         dirty: false,
@@ -202,12 +206,6 @@ function FilesRoute() {
     anchor.href = url
     anchor.download = loaded.name
     anchor.click()
-  }, [loaded])
-
-  const handleOpenInTab = useCallback(() => {
-    if (!loaded) return
-    const url = `/api/files?action=view&path=${encodeURIComponent(loaded.path)}`
-    window.open(url, '_blank', 'noopener,noreferrer')
   }, [loaded])
 
   const handleSave = useCallback(async () => {
@@ -323,19 +321,6 @@ function FilesRoute() {
                 ) : null}
                 <button
                   type="button"
-                  onClick={handleOpenInTab}
-                  className="inline-flex items-center gap-1 rounded-md border border-primary-200 px-2.5 py-1 text-xs font-medium text-primary-700 hover:bg-primary-100"
-                  title="Open this file in a new browser tab"
-                >
-                  <HugeiconsIcon
-                    icon={ExternalLink}
-                    size={14}
-                    strokeWidth={1.6}
-                  />
-                  Open
-                </button>
-                <button
-                  type="button"
                   onClick={handleDownload}
                   className="inline-flex items-center gap-1 rounded-md border border-primary-200 px-2.5 py-1 text-xs font-medium text-primary-700 hover:bg-primary-100"
                   title="Download this file to your computer"
@@ -367,7 +352,7 @@ function FilesRoute() {
                   className="max-h-full max-w-full rounded-lg border border-primary-200 shadow-sm object-contain"
                 />
               </div>
-            ) : isMarkdown && renderMarkdown && loaded ? (
+            ) : isMarkdown && renderMarkdown ? (
               <ScrollAreaRoot className="h-full">
                 <ScrollAreaViewport>
                   <div className="markdown-preview mx-auto max-w-4xl px-6 py-5 text-sm text-primary-900">

@@ -22,7 +22,7 @@ const CONFIG_PATH = path.join(CLAUDE_HOME, 'config.yaml')
 
 type ModelEntry = {
   provider?: string
-  id?: string
+  id: string
   name?: string
   [key: string]: unknown
 }
@@ -66,7 +66,7 @@ function normalizeModel(entry: unknown): ModelEntry | null {
   }
 }
 
-export function mergeModelEntries(...sources: Array<Array<ModelEntry>>): Array<ModelEntry> {
+export function mergeModelEntries(...sources: Array<Array<unknown>>): Array<ModelEntry> {
   const merged: Array<ModelEntry> = []
   const seen = new Set<string>()
 

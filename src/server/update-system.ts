@@ -1,11 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -70,18 +64,11 @@ export type ApplyUpdateResult = {
   error?: string
 }
 
+export const SOURCE_UPDATE_CONTAINMENT_REASON =
+  'One-click source updates are disabled until the reviewed staged-release workflow provides immutable artifacts, frozen dependencies, atomic activation, health/readback, and rollback.'
+
 function pendingNotesPath(): string {
   return join(process.cwd(), '.runtime', 'pending-update-release-notes.json')
-}
-
-function persistPendingReleaseNotes(sections: Array<ReleaseNoteSection>): void {
-  if (!sections.length) return
-  const path = pendingNotesPath()
-  mkdirSync(join(process.cwd(), '.runtime'), { recursive: true })
-  writeFileSync(
-    path,
-    `${JSON.stringify({ sections, updatedAt: Date.now() }, null, 2)}\n`,
-  )
 }
 
 function readPendingReleaseNotes(): Array<ReleaseNoteSection> {
@@ -120,19 +107,6 @@ function exec(
   } catch {
     return null
   }
-}
-
-function execOrThrow(
-  command: string,
-  args: Array<string>,
-  options: { cwd?: string; timeout?: number } = {},
-): string {
-  return execFileSync(command, args, {
-    cwd: options.cwd ?? process.cwd(),
-    encoding: 'utf8',
-    timeout: options.timeout ?? 300_000,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }).trim()
 }
 
 function git(args: Array<string>, cwd: string, timeout = 8_000): string | null {
@@ -217,12 +191,19 @@ function canFastForward(repoPath: string, remoteRef: string): boolean {
   )
 }
 
-function canResetToRemote(repoPath: string, remoteRef: string): boolean {
+function hasRemoteRef(repoPath: string, remoteRef: string): boolean {
   return Boolean(git(['rev-parse', '--verify', remoteRef], repoPath, 10_000))
 }
 
-function branchDivergence(repoPath: string, remoteRef: string): { ahead: number; behind: number } | null {
-  const raw = git(['rev-list', '--left-right', '--count', `HEAD...${remoteRef}`], repoPath, 10_000)
+function branchDivergence(
+  repoPath: string,
+  remoteRef: string,
+): { ahead: number; behind: number } | null {
+  const raw = git(
+    ['rev-list', '--left-right', '--count', `HEAD...${remoteRef}`],
+    repoPath,
+    10_000,
+  )
   if (!raw) return null
   const [aheadRaw, behindRaw] = raw.split(/\s+/)
   const ahead = Number(aheadRaw)
@@ -241,32 +222,58 @@ export function updateAvailableFromDivergence(
   return divergence ? divergence.behind > 0 : headsDiffer
 }
 
-function syncRepoToRemote(repoPath: string, remoteRef: string): string {
-  if (canFastForward(repoPath, remoteRef)) {
-    return execOrThrow('git', ['merge', '--ff-only', remoteRef], {
-      cwd: repoPath,
-      timeout: 60_000,
-    })
+/**
+ * Apply the Phase 0 source-updater containment invariant without discarding
+ * useful observational metadata. A local checkout may be current, ahead,
+ * behind, dirty, or diverged; none of those shapes authorizes in-process
+ * source mutation.
+ */
+export function enforceSourceUpdateContainment(
+  status: ProductUpdateStatus,
+): ProductUpdateStatus {
+  return {
+    ...status,
+    canUpdate: false,
+    state: 'blocked',
+    reason: SOURCE_UPDATE_CONTAINMENT_REASON,
+    updateMode: 'manual',
   }
-  return execOrThrow('git', ['reset', '--hard', remoteRef], {
-    cwd: repoPath,
-    timeout: 60_000,
-  })
 }
 
-function readCommits(
-  repoPath: string,
-  from: string | null,
-  to: string | null,
-): Array<string> {
-  if (!from || !to || from === to) return []
-  return (
-    git(['log', '--pretty=format:%s (%h)', `${from}..${to}`], repoPath, 10_000)
-      ?.split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(0, 12) ?? []
-  )
+/**
+ * The apply endpoints must fail before status discovery, child processes,
+ * filesystem access, activation, or receipt writes. Keep this status factory
+ * pure so calling either endpoint has zero updater side effects.
+ */
+function blockedApplyStatus(product: ProductId): ProductUpdateStatus {
+  return {
+    id: product,
+    label: product === 'workspace' ? 'Hermes Workspace' : 'Hermes Agent',
+    installKind: 'unknown',
+    version: 'unknown',
+    path: null,
+    repoPath: null,
+    branch: null,
+    currentHead: null,
+    latestHead: null,
+    updateAvailable: false,
+    canUpdate: false,
+    state: 'blocked',
+    reason: SOURCE_UPDATE_CONTAINMENT_REASON,
+    updateMode: 'manual',
+  }
+}
+
+function blockedApplyResult(product: ProductId): ApplyUpdateResult {
+  return {
+    ok: false,
+    product,
+    output: '',
+    restartRequired: false,
+    status: blockedApplyStatus(product),
+    releaseNotes: [],
+    error: SOURCE_UPDATE_CONTAINMENT_REASON,
+  }
 }
 
 function workspaceInstallKind(): InstallKind {
@@ -288,7 +295,7 @@ export function readWorkspaceUpdateStatus(
   const version = gitRepo ? pkgVersion(gitRepo) : 'unknown'
 
   if (installKind === 'desktop') {
-    return {
+    return enforceSourceUpdateContainment({
       id: 'workspace',
       label: 'Hermes Workspace',
       installKind,
@@ -304,11 +311,11 @@ export function readWorkspaceUpdateStatus(
       reason:
         'Desktop auto-updater manifest is not wired yet. This path is reserved for DMG/EXE packaging.',
       updateMode: 'desktop-auto-updater',
-    }
+    })
   }
 
   if (installKind === 'docker') {
-    return {
+    return enforceSourceUpdateContainment({
       id: 'workspace',
       label: 'Hermes Workspace',
       installKind,
@@ -324,11 +331,11 @@ export function readWorkspaceUpdateStatus(
       reason:
         'Docker installs should update by pulling a newer image/tag, not by mutating the running container.',
       updateMode: 'docker-manual',
-    }
+    })
   }
 
   if (!gitRepo) {
-    return {
+    return enforceSourceUpdateContainment({
       id: 'workspace',
       label: 'Hermes Workspace',
       installKind: 'unknown',
@@ -343,7 +350,7 @@ export function readWorkspaceUpdateStatus(
       state: 'unsupported',
       reason: 'Workspace install type could not be detected.',
       updateMode: 'manual',
-    }
+    })
   }
 
   const remoteUrl = git(['remote', 'get-url', 'origin'], gitRepo)
@@ -361,15 +368,18 @@ export function readWorkspaceUpdateStatus(
   const remoteRef = `origin/${branch || 'main'}`
   const divergence = latestHead ? branchDivergence(gitRepo, remoteRef) : null
   const updateAvailable = Boolean(
-    supportedBranch && currentHead && latestHead && updateAvailableFromDivergence(divergence, currentHead !== latestHead),
+    supportedBranch &&
+    currentHead &&
+    latestHead &&
+    updateAvailableFromDivergence(divergence, currentHead !== latestHead),
   )
-  const canSync = updateAvailable ? canResetToRemote(gitRepo, remoteRef) : true
+  const canSync = updateAvailable ? hasRemoteRef(gitRepo, remoteRef) : true
   const ff = updateAvailable ? canFastForward(gitRepo, remoteRef) : true
   const canUpdate = Boolean(
     repoMatches && supportedBranch && updateAvailable && !dirty && canSync,
   )
 
-  return {
+  return enforceSourceUpdateContainment({
     id: 'workspace',
     label: 'Hermes Workspace',
     installKind: 'git',
@@ -405,7 +415,7 @@ export function readWorkspaceUpdateStatus(
               : null,
     blockingFiles: dirty ? listDirtyFiles(gitRepo) : undefined,
     updateMode: 'git-ff',
-  }
+  })
 }
 
 function agentRepoPath(): string | null {
@@ -426,14 +436,16 @@ export function readAgentUpdateStatus(): ProductUpdateStatus {
   const repoPath = agentRepoPath()
   const repoHermes = repoPath ? join(repoPath, 'venv', 'bin', 'hermes') : null
   const path =
-    repoHermes && existsSync(repoHermes) ? repoHermes : exec('which', ['hermes'])
+    repoHermes && existsSync(repoHermes)
+      ? repoHermes
+      : exec('which', ['hermes'])
   const version =
     (path ? exec(path, ['--version'], { timeout: 10_000 }) : null)?.split(
       '\n',
     )[0] ?? 'unknown'
 
   if (!repoPath) {
-    return {
+    return enforceSourceUpdateContainment({
       id: 'agent',
       label: 'Hermes Agent',
       installKind: 'unknown',
@@ -449,7 +461,7 @@ export function readAgentUpdateStatus(): ProductUpdateStatus {
       reason:
         'Hermes Agent git checkout was not found. Bundled desktop installs will update through the app updater.',
       updateMode: 'manual',
-    }
+    })
   }
 
   const remoteUrl = git(['remote', 'get-url', 'origin'], repoPath)
@@ -466,13 +478,16 @@ export function readAgentUpdateStatus(): ProductUpdateStatus {
   const dirty = isDirty(repoPath)
   const divergence = remoteRef ? branchDivergence(repoPath, remoteRef) : null
   const updateAvailable = Boolean(
-    currentHead && latestHead && remoteRef && updateAvailableFromDivergence(divergence, currentHead !== latestHead),
+    currentHead &&
+    latestHead &&
+    remoteRef &&
+    updateAvailableFromDivergence(divergence, currentHead !== latestHead),
   )
-  const canSync = remoteRef ? canResetToRemote(repoPath, remoteRef) : false
+  const canSync = remoteRef ? hasRemoteRef(repoPath, remoteRef) : false
   const ff = remoteRef ? canFastForward(repoPath, remoteRef) : false
   const canUpdate = Boolean(repoMatches && updateAvailable && !dirty && canSync)
 
-  return {
+  return enforceSourceUpdateContainment({
     id: 'agent',
     label: 'Hermes Agent',
     installKind: 'git',
@@ -504,7 +519,7 @@ export function readAgentUpdateStatus(): ProductUpdateStatus {
             : null,
     blockingFiles: dirty ? listDirtyFiles(repoPath) : undefined,
     updateMode: 'hermes-update',
-  }
+  })
 }
 
 export function readUpdateStatus(): UpdateStatus {
@@ -520,160 +535,9 @@ export function readUpdateStatus(): UpdateStatus {
 }
 
 export function applyWorkspaceUpdate(): ApplyUpdateResult {
-  const before = readWorkspaceUpdateStatus()
-  if (!before.canUpdate || !before.repoPath || !before.branch) {
-    return {
-      ok: false,
-      product: 'workspace',
-      output: '',
-      restartRequired: false,
-      status: before,
-      releaseNotes: [],
-      error: before.reason || 'Workspace update is not available.',
-    }
-  }
-  const output: Array<string> = []
-  output.push(
-    execOrThrow('git', ['fetch', 'origin'], {
-      cwd: before.repoPath,
-      timeout: 60_000,
-    }),
-  )
-  const remoteRef = `origin/${before.branch}`
-  if (!canResetToRemote(before.repoPath, remoteRef)) {
-    const status = readWorkspaceUpdateStatus()
-    return {
-      ok: false,
-      product: 'workspace',
-      output: output.filter(Boolean).join('\n'),
-      restartRequired: false,
-      status,
-      releaseNotes: [],
-      error: `${remoteRef} could not be verified.`,
-    }
-  }
-  output.push(syncRepoToRemote(before.repoPath, remoteRef))
-  const after = readWorkspaceUpdateStatus()
-  const changedFiles =
-    before.currentHead && after.currentHead
-      ? (git(
-          ['diff', '--name-only', before.currentHead, after.currentHead],
-          before.repoPath,
-          10_000,
-        )
-          ?.split('\n')
-          .filter(Boolean) ?? [])
-      : []
-  if (
-    changedFiles.some(
-      (file) => file === 'package.json' || file === 'pnpm-lock.yaml',
-    )
-  ) {
-    output.push(
-      execOrThrow('pnpm', ['install', '--no-frozen-lockfile'], {
-        cwd: before.repoPath,
-        timeout: 180_000,
-      }),
-    )
-  }
-  if (
-    changedFiles.some(
-      (file) =>
-        file.startsWith('src/') ||
-        file === 'package.json' ||
-        file === 'pnpm-lock.yaml' ||
-        file.startsWith('vite') ||
-        file.startsWith('tsconfig'),
-    )
-  ) {
-    output.push(
-      execOrThrow('pnpm', ['build'], {
-        cwd: before.repoPath,
-        timeout: 240_000,
-      }),
-    )
-  }
-  const releaseNotes = [
-    {
-      product: 'workspace' as const,
-      label: 'Hermes Workspace',
-      from: before.currentHead,
-      to: after.currentHead,
-      commits: readCommits(
-        before.repoPath,
-        before.currentHead,
-        after.currentHead,
-      ),
-    },
-  ]
-  persistPendingReleaseNotes(releaseNotes)
-  return {
-    ok: true,
-    product: 'workspace',
-    output: output.filter(Boolean).join('\n'),
-    restartRequired: before.currentHead !== after.currentHead,
-    status: after,
-    releaseNotes,
-  }
+  return blockedApplyResult('workspace')
 }
 
 export function applyAgentUpdate(): ApplyUpdateResult {
-  const before = readAgentUpdateStatus()
-  if (!before.canUpdate || !before.repoPath) {
-    return {
-      ok: false,
-      product: 'agent',
-      output: '',
-      restartRequired: false,
-      status: before,
-      releaseNotes: [],
-      error: before.reason || 'Hermes Agent update is not available.',
-    }
-  }
-
-  const output: Array<string> = []
-  output.push(
-    execOrThrow('git', ['fetch', 'origin'], {
-      cwd: before.repoPath,
-      timeout: 60_000,
-    }),
-  )
-  const remoteRef = `origin/${before.branch || 'main'}`
-  if (!canResetToRemote(before.repoPath, remoteRef)) {
-    const status = readAgentUpdateStatus()
-    return {
-      ok: false,
-      product: 'agent',
-      output: output.filter(Boolean).join('\n'),
-      restartRequired: false,
-      status,
-      releaseNotes: [],
-      error: `${remoteRef} could not be verified.`,
-    }
-  }
-  output.push(syncRepoToRemote(before.repoPath, remoteRef))
-
-  const after = readAgentUpdateStatus()
-  const releaseNotes = [
-    {
-      product: 'agent' as const,
-      label: 'Hermes Agent',
-      from: before.currentHead,
-      to: after.currentHead,
-      commits: readCommits(
-        before.repoPath,
-        before.currentHead,
-        after.currentHead,
-      ),
-    },
-  ]
-  persistPendingReleaseNotes(releaseNotes)
-  return {
-    ok: true,
-    product: 'agent',
-    output: output.filter(Boolean).join('\n'),
-    restartRequired: before.currentHead !== after.currentHead,
-    status: after,
-    releaseNotes,
-  }
+  return blockedApplyResult('agent')
 }

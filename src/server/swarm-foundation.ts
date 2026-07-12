@@ -83,7 +83,7 @@ const RuntimeArtifactMetadataSchema = z.object({
 const RuntimePreviewMetadataSchema = z.object({
   id: z.string(),
   label: z.string(),
-  url: z.string(),
+  url: z.literal(''),
   source: SwarmPreviewSourceSchema,
   status: SwarmPreviewStatusSchema,
   workerId: z.string(),
@@ -284,14 +284,17 @@ function parsePreviewMetadata(workerId: string, value: unknown): Array<SwarmPrev
   return value
     .map((entry, index) => {
       const row = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {}
+      const parsedStatus = SwarmPreviewStatusSchema.safeParse(
+        readString(row.status),
+      )
       return RuntimePreviewMetadataSchema.safeParse({
-        id: readString(row.id) ?? `${workerId}-preview-${index}`,
-        label: readString(row.label) ?? readString(row.url) ?? 'preview',
-        url: readString(row.url) ?? '',
-        source: readString(row.source) ?? 'runtime',
-        status: readString(row.status) ?? 'unknown',
+        id: `${workerId}-preview-${index}`,
+        label: (readString(row.label) ?? 'Preview unavailable').slice(0, 160),
+        url: '',
+        source: 'runtime',
+        status: parsedStatus.success ? parsedStatus.data : 'unknown',
         workerId,
-        updatedAt: readNumber(row.updatedAt),
+        updatedAt: null,
       })
     })
     .flatMap((result) => (result.success ? [result.data] : []))

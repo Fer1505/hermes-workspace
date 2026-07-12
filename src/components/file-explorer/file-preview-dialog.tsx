@@ -6,6 +6,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { isSafeMarkdownImageSource } from '@/components/prompt-kit/markdown'
+import { isSafeRasterName } from '@/lib/generated-content-containment'
 
 const LANGUAGE_MAP: Record<string, string> = {
   ts: 'typescript',
@@ -27,9 +29,7 @@ function getExtension(path: string) {
 }
 
 function isImageFile(path: string) {
-  return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(
-    getExtension(path),
-  )
+  return isSafeRasterName(path)
 }
 
 function isTextFile(path: string) {
@@ -72,7 +72,11 @@ export default function FilePreviewDialog({
         type: 'text' | 'image'
         content: string
       }
-      if (data.type === 'image') {
+      if (
+        data.type === 'image' &&
+        isImageFile(path) &&
+        isSafeMarkdownImageSource(data.content)
+      ) {
         setDataUrl(data.content)
         setContent('')
       } else {

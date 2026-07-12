@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { usePageTitle } from '@/hooks/use-page-title'
 import {
@@ -16,7 +17,11 @@ import {
   DialogRoot,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Markdown } from '@/components/prompt-kit/markdown'
+import {
+  Markdown,
+  isSafeMarkdownImageSource,
+} from '@/components/prompt-kit/markdown'
+import { isSafeRasterName } from '@/lib/generated-content-containment'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -74,7 +79,6 @@ const IGNORED_DIRS = new Set([
   'dist',
 ])
 
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
 const CODE_EXTS = new Set([
   'ts',
   'tsx',
@@ -100,7 +104,7 @@ function getExt(name: string): string {
 }
 
 function isImageFile(name: string): boolean {
-  return IMAGE_EXTS.has(getExt(name))
+  return isSafeRasterName(name)
 }
 
 function isCodeFile(name: string): boolean {
@@ -110,11 +114,6 @@ function isCodeFile(name: string): boolean {
 function isMarkdownFile(name: string): boolean {
   const ext = getExt(name)
   return ext === 'md' || ext === 'mdx'
-}
-
-function isHtmlFile(name: string): boolean {
-  const ext = getExt(name)
-  return ext === 'html' || ext === 'htm'
 }
 
 function isEditableFile(name: string): boolean {
@@ -128,7 +127,7 @@ function getFileIcon(entry: FileEntry): string {
   if (ext === 'json') return '📋'
   if (ext === 'ts' || ext === 'tsx' || ext === 'js' || ext === 'jsx')
     return '📜'
-  if (IMAGE_EXTS.has(ext)) return '🖼'
+  if (isSafeRasterName(entry.name)) return '🖼'
   return '📃'
 }
 
@@ -695,7 +694,6 @@ function FilePanel({ selectedEntry }: FilePanelProps) {
   const ext = getExt(fileName)
   const isImage = isImageFile(fileName)
   const isMd = isMarkdownFile(fileName)
-  const isHtml = isHtmlFile(fileName)
   const isCode = isCodeFile(fileName)
   const isEditable = isEditableFile(fileName)
 
@@ -717,7 +715,11 @@ function FilePanel({ selectedEntry }: FilePanelProps) {
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = (await res.json()) as FileReadResponse
-      if (data.type === 'image') {
+      if (
+        data.type === 'image' &&
+        isSafeRasterName(path) &&
+        isSafeMarkdownImageSource(data.content)
+      ) {
         setDataUrl(data.content)
       } else {
         setContent(data.content)
@@ -829,13 +831,13 @@ function FilePanel({ selectedEntry }: FilePanelProps) {
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        {(isMd || isHtml) && !isImage && (
+        {isMd && !isImage && (
           <Button
             size="sm"
             variant="outline"
             onClick={() => setRawMode((v) => !v)}
           >
-            {rawMode ? (isHtml ? 'Preview HTML' : 'Preview') : (isHtml ? 'Raw HTML' : 'Raw')}
+            {rawMode ? 'Preview' : 'Raw'}
           </Button>
         )}
         {isEditable && (
@@ -948,29 +950,7 @@ function FilePanel({ selectedEntry }: FilePanelProps) {
     )
   }
 
-  // ── HTML preview ───────────────────────────────────────────────────────────
-
-  if (isHtml && !rawMode) {
-    return (
-      <>
-        {diffModal}
-        <div className="flex h-full flex-col">
-          {header}
-          <div className="min-h-0 flex-1 bg-white">
-            <iframe
-              title={`HTML preview: ${selectedEntry.name}`}
-              srcDoc={content}
-              sandbox="allow-same-origin"
-              className="h-full w-full border-0 bg-white"
-            />
-          </div>
-          {footer}
-        </div>
-      </>
-    )
-  }
-
-  // ── Code viewer (syntax highlighted) — also raw mode for md ───────────────
+  // ── Code viewer (syntax highlighted) — HTML stays escaped source ──────────
 
   if (isCode) {
     const displayContent = isMd ? highlightCodeContent(content, 'md') : highlighted

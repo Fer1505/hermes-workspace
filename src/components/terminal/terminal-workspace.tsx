@@ -461,7 +461,7 @@ export function TerminalWorkspace({
       }
 
       // Flush any remaining buffered writes
-      clearTimeout(flushTimer as ReturnType<typeof setTimeout>)
+      if (flushTimer !== null) clearTimeout(flushTimer)
       flushWrites()
 
       const latestTab = useTerminalPanelStore
