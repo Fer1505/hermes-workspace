@@ -1,11 +1,33 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import YAML from 'yaml'
-import { SWARM_CANONICAL_REPO, SWARM_MEMORY_HANDOFFS } from './swarm-environment'
+import {
+  SWARM_CANONICAL_REPO,
+  SWARM_MEMORY_HANDOFFS,
+} from './swarm-environment'
 import type { ParsedSwarmCheckpoint } from './swarm-checkpoints'
 
-export type SwarmMemoryKind = 'profile' | 'mission' | 'episodic' | 'handoff' | 'shared'
+export type SwarmMemoryKind =
+  | 'profile'
+  | 'mission'
+  | 'episodic'
+  | 'handoff'
+  | 'shared'
 
 export type SwarmMemoryEventType =
   | 'mission-start'
@@ -52,9 +74,32 @@ export type SwarmMemorySearchResult = {
 }
 
 export const SWARM_SHARED_MEMORY_ROOT = join(SWARM_MEMORY_HANDOFFS, 'swarm')
-export const SWARM_SHARED_HANDOFF_ROOT = join(SWARM_MEMORY_HANDOFFS, 'handoffs', 'swarm')
+export const SWARM_SHARED_HANDOFF_ROOT = join(
+  SWARM_MEMORY_HANDOFFS,
+  'handoffs',
+  'swarm',
+)
 export const SWARM_RUNTIME_ROOT = join(SWARM_CANONICAL_REPO, '.runtime')
-export const SWARM_PROJECT_CONTEXT_PATH = join(SWARM_SHARED_MEMORY_ROOT, 'PROJECT.md')
+export const SWARM_PROJECT_CONTEXT_PATH = join(
+  SWARM_SHARED_MEMORY_ROOT,
+  'PROJECT.md',
+)
+
+const STATE_LOCK_TIMEOUT_MS = 5_000
+const STATE_LOCK_STALE_MS = 60_000
+const HANDOFF_SCHEMA_VERSION = 'olympus_swarm_handoff_v1'
+const HANDOFF_PREFIX = '<!-- olympus-swarm-handoff-v1 '
+const HANDOFF_SUFFIX = ' -->'
+const DEFAULT_HANDOFF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000
+
+type SwarmHandoffEnvelope = {
+  schemaVersion: typeof HANDOFF_SCHEMA_VERSION
+  handoffId: string
+  workerId: string
+  missionId: string
+  writtenAt: string
+  contentSha256: string
+}
 
 function profileRoot(workerId: string): string {
   return join(homedir(), '.hermes', 'profiles', workerId)
@@ -68,7 +113,10 @@ export function swarmWorkerMemoryRoot(workerId: string): string {
   return join(profileRoot(workerId), 'memory')
 }
 
-export function swarmWorkerMissionMemoryRoot(workerId: string, missionId: string): string {
+export function swarmWorkerMissionMemoryRoot(
+  workerId: string,
+  missionId: string,
+): string {
   return join(swarmWorkerMemoryRoot(workerId), 'missions', missionId)
 }
 
@@ -104,14 +152,168 @@ function ensureDir(path: string): void {
 
 function atomicWrite(path: string, content: string): void {
   ensureDir(dirname(path))
-  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`
-  writeFileSync(tmp, content)
-  renameSync(tmp, path)
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
+  let fd: number | null = null
+  try {
+    fd = openSync(tmp, 'wx', 0o600)
+    writeFileSync(fd, content, 'utf8')
+    fsyncSync(fd)
+    closeSync(fd)
+    fd = null
+    renameSync(tmp, path)
+    const dirFd = openSync(dirname(path), 'r')
+    try {
+      fsyncSync(dirFd)
+    } finally {
+      closeSync(dirFd)
+    }
+  } catch (error) {
+    if (fd !== null) closeSync(fd)
+    rmSync(tmp, { force: true })
+    throw error
+  }
 }
 
 function appendLine(path: string, content: string): void {
   ensureDir(dirname(path))
-  appendFileSync(path, content.endsWith('\n') ? content : `${content}\n`)
+  const fd = openSync(path, 'a', 0o600)
+  try {
+    appendFileSync(
+      fd,
+      content.endsWith('\n') ? content : `${content}\n`,
+      'utf8',
+    )
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function sleepSync(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
+}
+
+function withStateLock<T>(target: string, action: () => T): T {
+  const lockPath = `${target}.lock`
+  const ownerPath = join(lockPath, 'owner.json')
+  const token = `${process.pid}:${randomUUID()}`
+  const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS
+  ensureDir(dirname(lockPath))
+
+  while (true) {
+    try {
+      mkdirSync(lockPath)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'EEXIST') throw error
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > STATE_LOCK_STALE_MS) {
+          const stalePath = `${lockPath}.stale.${randomUUID()}`
+          renameSync(lockPath, stalePath)
+          rmSync(stalePath, { recursive: true, force: true })
+          continue
+        }
+      } catch (staleError) {
+        if (
+          !['ENOENT', 'EEXIST'].includes(
+            (staleError as NodeJS.ErrnoException).code ?? '',
+          )
+        ) {
+          throw staleError
+        }
+        continue
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out acquiring state lock for ${target}`)
+      }
+      sleepSync(5)
+      continue
+    }
+    try {
+      writeFileSync(
+        ownerPath,
+        JSON.stringify({ token, acquiredAt: new Date().toISOString() }),
+      )
+      break
+    } catch (error) {
+      rmSync(lockPath, { recursive: true, force: true })
+      throw error
+    }
+  }
+
+  try {
+    return action()
+  } finally {
+    try {
+      const owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as {
+        token?: unknown
+      }
+      if (owner.token === token)
+        rmSync(lockPath, { recursive: true, force: true })
+    } catch {
+      // Never remove a lock whose ownership cannot be proven.
+    }
+  }
+}
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex')
+}
+
+function encodeHandoff(
+  workerId: string,
+  missionId: string,
+  content: string,
+): string {
+  const normalizedContent = content.endsWith('\n') ? content : `${content}\n`
+  const envelope: SwarmHandoffEnvelope = {
+    schemaVersion: HANDOFF_SCHEMA_VERSION,
+    handoffId: randomUUID(),
+    workerId,
+    missionId,
+    writtenAt: new Date().toISOString(),
+    contentSha256: sha256(normalizedContent),
+  }
+  return `${HANDOFF_PREFIX}${JSON.stringify(envelope)}${HANDOFF_SUFFIX}\n${normalizedContent}`
+}
+
+function readValidatedHandoff(input: {
+  path: string
+  workerId: string
+  missionId: string
+  maxAgeMs: number
+}): (SwarmHandoffEnvelope & { path: string; content: string }) | null {
+  if (!existsSync(input.path)) return null
+  const stored = readTextIfExists(input.path)
+  const newline = stored.indexOf('\n')
+  if (newline < 0) return null
+  const header = stored.slice(0, newline)
+  if (!header.startsWith(HANDOFF_PREFIX) || !header.endsWith(HANDOFF_SUFFIX))
+    return null
+  try {
+    const envelope = JSON.parse(
+      header.slice(HANDOFF_PREFIX.length, -HANDOFF_SUFFIX.length),
+    ) as Partial<SwarmHandoffEnvelope>
+    const content = stored.slice(newline + 1)
+    const writtenAtMs = Date.parse(envelope.writtenAt ?? '')
+    const ageMs = Date.now() - writtenAtMs
+    if (
+      envelope.schemaVersion !== HANDOFF_SCHEMA_VERSION ||
+      typeof envelope.handoffId !== 'string' ||
+      !envelope.handoffId ||
+      envelope.workerId !== input.workerId ||
+      envelope.missionId !== input.missionId ||
+      !Number.isFinite(writtenAtMs) ||
+      ageMs < -60_000 ||
+      ageMs > input.maxAgeMs ||
+      envelope.contentSha256 !== sha256(content)
+    ) {
+      return null
+    }
+    return { ...(envelope as SwarmHandoffEnvelope), path: input.path, content }
+  } catch {
+    return null
+  }
 }
 
 function todayUtc(): string {
@@ -139,7 +341,8 @@ export function ensureWorkerMemoryScaffold(input: {
   model?: string | null
 }): void {
   const { workerId } = input
-  if (!validateSwarmId(workerId)) throw new Error(`Invalid workerId: ${workerId}`)
+  if (!validateSwarmId(workerId))
+    throw new Error(`Invalid workerId: ${workerId}`)
   const root = swarmWorkerMemoryRoot(workerId)
   ensureDir(root)
   ensureDir(join(root, 'missions'))
@@ -155,39 +358,48 @@ export function ensureWorkerMemoryScaffold(input: {
 
   const memoryPath = join(root, 'MEMORY.md')
   if (!existsSync(memoryPath)) {
-    atomicWrite(memoryPath, [
-      markdownHeader(`Memory pointer — ${workerId}`),
-      'This file is a pointer, not a memory store.\n\n',
-      `Durable long-term memory for ${workerId} lives at:\n`,
-      `~/.\u0068\u0065\u0072\u006d\u0065\u0073/profiles/${workerId}/MEMORY.md\n\n`,
-      'Swarm-specific memory under this directory:\n',
-      '- IDENTITY.md — worker role/specialty\n',
-      '- missions/<missionId>/SUMMARY.md + events.jsonl — per-mission memory\n',
-      '- episodes/YYYY-MM-DD.md — daily episodic log\n',
-      '- handoffs/<missionId>.md or latest.md — compaction/restart handoffs\n',
-    ].join(''))
+    atomicWrite(
+      memoryPath,
+      [
+        markdownHeader(`Memory pointer — ${workerId}`),
+        'This file is a pointer, not a memory store.\n\n',
+        `Durable long-term memory for ${workerId} lives at:\n`,
+        `~/.\u0068\u0065\u0072\u006d\u0065\u0073/profiles/${workerId}/MEMORY.md\n\n`,
+        'Swarm-specific memory under this directory:\n',
+        '- IDENTITY.md — worker role/specialty\n',
+        '- missions/<missionId>/SUMMARY.md + events.jsonl — per-mission memory\n',
+        '- episodes/YYYY-MM-DD.md — daily episodic log\n',
+        '- handoffs/<missionId>.md or latest.md — compaction/restart handoffs\n',
+      ].join(''),
+    )
   }
 
   const identityPath = join(root, 'IDENTITY.md')
   if (!existsSync(identityPath)) {
-    atomicWrite(identityPath, [
-      markdownHeader(`IDENTITY.md — ${workerId}`),
-      `- Name: ${input.name ?? workerId}\n`,
-      `- Worker ID: ${workerId}\n`,
-      `- Role: ${input.role ?? 'Unassigned'}\n`,
-      `- Specialty: ${input.specialty ?? 'Unassigned'}\n`,
-      `- Model: ${input.model ?? 'Unspecified'}\n`,
-    ].join(''))
+    atomicWrite(
+      identityPath,
+      [
+        markdownHeader(`IDENTITY.md — ${workerId}`),
+        `- Name: ${input.name ?? workerId}\n`,
+        `- Worker ID: ${workerId}\n`,
+        `- Role: ${input.role ?? 'Unassigned'}\n`,
+        `- Specialty: ${input.specialty ?? 'Unassigned'}\n`,
+        `- Model: ${input.model ?? 'Unspecified'}\n`,
+      ].join(''),
+    )
   }
 
   const soulPath = join(root, 'SOUL.md')
   if (!existsSync(soulPath)) {
-    atomicWrite(soulPath, [
-      markdownHeader(`SOUL pointer — ${workerId}`),
-      'This file is a pointer, not a persona store.\n\n',
-      `Persona/SOUL for ${workerId} lives at:\n`,
-      `~/.\u0068\u0065\u0072\u006d\u0065\u0073/profiles/${workerId}/SOUL.md\n`,
-    ].join(''))
+    atomicWrite(
+      soulPath,
+      [
+        markdownHeader(`SOUL pointer — ${workerId}`),
+        'This file is a pointer, not a persona store.\n\n',
+        `Persona/SOUL for ${workerId} lives at:\n`,
+        `~/.\u0068\u0065\u0072\u006d\u0065\u0073/profiles/${workerId}/SOUL.md\n`,
+      ].join(''),
+    )
   }
 }
 
@@ -211,22 +423,27 @@ function updateMissionSummary(input: {
   const path = missionSummaryPath(input.workerId, input.missionId)
   const current = readTextIfExists(path)
   if (!current) {
-    atomicWrite(path, [
-      markdownHeader(`Mission ${input.missionId} — ${input.title ?? 'Untitled mission'}`),
-      '## Current state\n\n',
-      `- Status: ${input.status ?? 'executing'}\n`,
-      `- Current assignment: ${input.assignmentId ?? 'none'}\n`,
-      `- Last updated: ${new Date().toISOString()}\n\n`,
-      '## Objective\n\n',
-      `${input.title ?? input.summary}\n\n`,
-      '## Decisions\n\n- None recorded yet.\n\n',
-      '## Files touched\n\n- None recorded yet.\n\n',
-      '## Checkpoints\n\n',
-      `- ${new Date().toISOString()}: ${input.summary}\n\n`,
-      '## Blockers\n\n- None recorded yet.\n\n',
-      '## Next action\n\n',
-      `${input.checkpoint?.nextAction ?? 'Continue assigned work.'}\n`,
-    ].join(''))
+    atomicWrite(
+      path,
+      [
+        markdownHeader(
+          `Mission ${input.missionId} — ${input.title ?? 'Untitled mission'}`,
+        ),
+        '## Current state\n\n',
+        `- Status: ${input.status ?? 'executing'}\n`,
+        `- Current assignment: ${input.assignmentId ?? 'none'}\n`,
+        `- Last updated: ${new Date().toISOString()}\n\n`,
+        '## Objective\n\n',
+        `${input.title ?? input.summary}\n\n`,
+        '## Decisions\n\n- None recorded yet.\n\n',
+        '## Files touched\n\n- None recorded yet.\n\n',
+        '## Checkpoints\n\n',
+        `- ${new Date().toISOString()}: ${input.summary}\n\n`,
+        '## Blockers\n\n- None recorded yet.\n\n',
+        '## Next action\n\n',
+        `${input.checkpoint?.nextAction ?? 'Continue assigned work.'}\n`,
+      ].join(''),
+    )
     return
   }
 
@@ -247,16 +464,23 @@ function updateMissionSummary(input: {
 function appendEpisode(input: SwarmMemoryEvent): void {
   if (!input.workerId || !validateSwarmId(input.workerId)) return
   const path = join(swarmWorkerEpisodesRoot(input.workerId), `${todayUtc()}.md`)
-  if (!existsSync(path)) {
-    atomicWrite(path, markdownHeader(`Episodes — ${input.workerId} — ${todayUtc()}`))
-  }
-  const lines = [
-    `\n## ${timeUtc()} UTC — ${input.type}\n`,
-    input.missionId ? `- Mission: ${input.missionId}\n` : '',
-    input.assignmentId ? `- Assignment: ${input.assignmentId}\n` : '',
-    `- Summary: ${input.summary}\n`,
-  ].filter(Boolean).join('')
-  appendLine(path, lines)
+  withStateLock(path, () => {
+    if (!existsSync(path)) {
+      atomicWrite(
+        path,
+        markdownHeader(`Episodes — ${input.workerId} — ${todayUtc()}`),
+      )
+    }
+    const lines = [
+      `\n## ${timeUtc()} UTC — ${input.type}\n`,
+      input.missionId ? `- Mission: ${input.missionId}\n` : '',
+      input.assignmentId ? `- Assignment: ${input.assignmentId}\n` : '',
+      `- Summary: ${input.summary}\n`,
+    ]
+      .filter(Boolean)
+      .join('')
+    appendLine(path, lines)
+  })
 }
 
 export function appendSwarmMemoryEvent(input: {
@@ -270,7 +494,8 @@ export function appendSwarmMemoryEvent(input: {
   checkpoint?: ParsedSwarmCheckpoint | null
 }): void {
   const { workerId, missionId } = input
-  if (!validateSwarmId(workerId)) throw new Error(`Invalid workerId: ${workerId}`)
+  if (!validateSwarmId(workerId))
+    throw new Error(`Invalid workerId: ${workerId}`)
   ensureWorkerMemoryScaffold({ workerId })
   const event: SwarmMemoryEvent = {
     at: new Date().toISOString(),
@@ -285,17 +510,24 @@ export function appendSwarmMemoryEvent(input: {
   appendEpisode(event)
 
   if (missionId) {
-    if (!validateMissionId(missionId)) throw new Error(`Invalid missionId: ${missionId}`)
-    ensureDir(swarmWorkerMissionMemoryRoot(workerId, missionId))
-    appendLine(missionEventsPath(workerId, missionId), JSON.stringify(event))
-    updateMissionSummary({
-      workerId,
-      missionId,
-      title: input.title,
-      summary: input.summary,
-      status: input.type === 'checkpoint' ? input.checkpoint?.runtimeState : 'executing',
-      assignmentId: input.assignmentId,
-      checkpoint: input.checkpoint,
+    if (!validateMissionId(missionId))
+      throw new Error(`Invalid missionId: ${missionId}`)
+    const missionRoot = swarmWorkerMissionMemoryRoot(workerId, missionId)
+    withStateLock(missionRoot, () => {
+      ensureDir(missionRoot)
+      appendLine(missionEventsPath(workerId, missionId), JSON.stringify(event))
+      updateMissionSummary({
+        workerId,
+        missionId,
+        title: input.title,
+        summary: input.summary,
+        status:
+          input.type === 'checkpoint'
+            ? input.checkpoint?.runtimeState
+            : 'executing',
+        assignmentId: input.assignmentId,
+        checkpoint: input.checkpoint,
+      })
     })
   }
 }
@@ -306,26 +538,46 @@ export function writeSwarmHandoff(input: {
   content: string
   mirrorShared?: boolean
 }): { localPath: string; sharedPath?: string } {
-  if (!validateSwarmId(input.workerId)) throw new Error(`Invalid workerId: ${input.workerId}`)
-  if (!validateMissionId(input.missionId)) throw new Error(`Invalid missionId: ${input.missionId}`)
-  const localPath = join(swarmWorkerHandoffsRoot(input.workerId), `${input.missionId}.md`)
-  atomicWrite(localPath, input.content.endsWith('\n') ? input.content : `${input.content}\n`)
+  if (!validateSwarmId(input.workerId))
+    throw new Error(`Invalid workerId: ${input.workerId}`)
+  if (!validateMissionId(input.missionId))
+    throw new Error(`Invalid missionId: ${input.missionId}`)
+  const handoffRoot = swarmWorkerHandoffsRoot(input.workerId)
+  const localPath = join(handoffRoot, `${input.missionId}.md`)
   let sharedPath: string | undefined
-  if (input.mirrorShared ?? true) {
-    sharedPath = join(SWARM_SHARED_HANDOFF_ROOT, `${input.workerId}-latest.md`)
-    atomicWrite(sharedPath, input.content.endsWith('\n') ? input.content : `${input.content}\n`)
-  }
+  withStateLock(join(handoffRoot, '.handoff-state'), () => {
+    const encoded = encodeHandoff(
+      input.workerId,
+      input.missionId,
+      input.content,
+    )
+    atomicWrite(localPath, encoded)
+    if (input.mirrorShared ?? true) {
+      sharedPath = join(
+        SWARM_SHARED_HANDOFF_ROOT,
+        `${input.workerId}-latest.md`,
+      )
+      atomicWrite(sharedPath, encoded)
+    }
+  })
   return { localPath, sharedPath }
 }
 
-function memoryRootFor(input: { workerId?: string | null; kind: SwarmMemoryKind; missionId?: string | null; date?: string | null }): string {
+function memoryRootFor(input: {
+  workerId?: string | null
+  kind: SwarmMemoryKind
+  missionId?: string | null
+  date?: string | null
+}): string {
   if (input.kind === 'shared') return SWARM_SHARED_MEMORY_ROOT
   const workerId = input.workerId?.trim()
-  if (!workerId || !validateSwarmId(workerId)) throw new Error('Valid workerId required')
+  if (!workerId || !validateSwarmId(workerId))
+    throw new Error('Valid workerId required')
   if (input.kind === 'profile') return swarmWorkerMemoryRoot(workerId)
   if (input.kind === 'mission') {
     const missionId = input.missionId?.trim()
-    if (!missionId || !validateMissionId(missionId)) throw new Error('Valid missionId required')
+    if (!missionId || !validateMissionId(missionId))
+      throw new Error('Valid missionId required')
     return swarmWorkerMissionMemoryRoot(workerId, missionId)
   }
   if (input.kind === 'episodic') return swarmWorkerEpisodesRoot(workerId)
@@ -351,13 +603,22 @@ function listFiles(root: string, maxDepth = 2): Array<string> {
   return out
 }
 
-export function readSwarmMemory(input: { workerId?: string | null; kind: SwarmMemoryKind; missionId?: string | null; date?: string | null }): SwarmMemoryReadResult {
+export function readSwarmMemory(input: {
+  workerId?: string | null
+  kind: SwarmMemoryKind
+  missionId?: string | null
+  date?: string | null
+}): SwarmMemoryReadResult {
   const root = memoryRootFor(input)
   ensureDir(root)
   const files = listFiles(root, input.kind === 'profile' ? 1 : 2)
     .filter((path) => !input.date || basename(path).startsWith(input.date))
     .slice(0, 50)
-    .map((path) => ({ name: basename(path), path, content: readFileSync(assertInside(root, path), 'utf8') }))
+    .map((path) => ({
+      name: basename(path),
+      path,
+      content: readFileSync(assertInside(root, path), 'utf8'),
+    }))
   return {
     ok: true,
     workerId: input.workerId ?? null,
@@ -374,16 +635,25 @@ function tokenScore(line: string, query: string): number {
   if (!q) return 0
   if (lower.includes(q)) return 100 + q.length
   const tokens = q.split(/\s+/).filter(Boolean)
-  return tokens.reduce((score, token) => score + (lower.includes(token) ? 10 : 0), 0)
+  return tokens.reduce(
+    (score, token) => score + (lower.includes(token) ? 10 : 0),
+    0,
+  )
 }
 
-export function searchSwarmMemory(input: { workerId?: string | null; query: string; scope?: 'worker' | 'shared' | 'all'; limit?: number }): Array<SwarmMemorySearchResult> {
+export function searchSwarmMemory(input: {
+  workerId?: string | null
+  query: string
+  scope?: 'worker' | 'shared' | 'all'
+  limit?: number
+}): Array<SwarmMemorySearchResult> {
   const query = input.query.trim()
   if (!query) return []
   const roots: Array<string> = []
   const scope = input.scope ?? 'worker'
   if ((scope === 'worker' || scope === 'all') && input.workerId) {
-    if (!validateSwarmId(input.workerId)) throw new Error(`Invalid workerId: ${input.workerId}`)
+    if (!validateSwarmId(input.workerId))
+      throw new Error(`Invalid workerId: ${input.workerId}`)
     roots.push(swarmWorkerMemoryRoot(input.workerId))
   }
   if (scope === 'shared' || scope === 'all') {
@@ -398,12 +668,19 @@ export function searchSwarmMemory(input: { workerId?: string | null; query: stri
       lines.forEach((line, index) => {
         const score = tokenScore(line, query)
         if (score > 0) {
-          results.push({ path: file, line: index + 1, score, snippet: line.trim().slice(0, 240) })
+          results.push({
+            path: file,
+            line: index + 1,
+            score,
+            snippet: line.trim().slice(0, 240),
+          })
         }
       })
     }
   }
-  return results.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(50, input.limit ?? 10)))
+  return results
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Math.min(50, input.limit ?? 10)))
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +701,10 @@ function readActiveMissionId(workerId: string): string | null {
   const runtimePath = profileFile(workerId, 'runtime.json')
   if (!existsSync(runtimePath)) return null
   try {
-    const json = JSON.parse(readFileSync(runtimePath, 'utf8')) as Record<string, unknown>
+    const json = JSON.parse(readFileSync(runtimePath, 'utf8')) as Record<
+      string,
+      unknown
+    >
     const id = json.currentMissionId
     return typeof id === 'string' && validateMissionId(id) ? id : null
   } catch {
@@ -436,16 +716,24 @@ function readEnabledToolsets(workerId: string): Array<string> {
   const configPath = profileFile(workerId, 'config.yaml')
   if (!existsSync(configPath)) return []
   try {
-    const parsed = YAML.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+    const parsed = YAML.parse(readFileSync(configPath, 'utf8')) as Record<
+      string,
+      unknown
+    >
     const toolsets = parsed.toolsets
     if (!Array.isArray(toolsets)) return []
-    return toolsets.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    return toolsets.filter(
+      (value): value is string =>
+        typeof value === 'string' && value.trim().length > 0,
+    )
   } catch {
     return []
   }
 }
 
-function newestEpisodeContent(workerId: string): { date: string; content: string } | null {
+function newestEpisodeContent(
+  workerId: string,
+): { date: string; content: string } | null {
   const root = swarmWorkerEpisodesRoot(workerId)
   if (!existsSync(root)) return null
   const entries = readdirSync(root)
@@ -453,11 +741,21 @@ function newestEpisodeContent(workerId: string): { date: string; content: string
     .sort()
   if (!entries.length) return null
   const latest = entries[entries.length - 1]
-  return { date: latest.replace(/\.md$/, ''), content: readTextIfExists(join(root, latest)) }
+  return {
+    date: latest.replace(/\.md$/, ''),
+    content: readTextIfExists(join(root, latest)),
+  }
 }
 
-function newestMissionEvents(workerId: string, missionId: string, n = 4): Array<string> {
-  const path = join(swarmWorkerMissionMemoryRoot(workerId, missionId), 'events.jsonl')
+function newestMissionEvents(
+  workerId: string,
+  missionId: string,
+  n = 4,
+): Array<string> {
+  const path = join(
+    swarmWorkerMissionMemoryRoot(workerId, missionId),
+    'events.jsonl',
+  )
   if (!existsSync(path)) return []
   const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean)
   return lines.slice(-n)
@@ -476,6 +774,7 @@ export type SwarmStartupSnapshotInput = {
   maxMissionChars?: number
   maxEpisodeChars?: number
   maxProjectChars?: number
+  maxHandoffAgeMs?: number
 }
 
 export type SwarmStartupSnapshot = {
@@ -486,16 +785,27 @@ export type SwarmStartupSnapshot = {
   user: string
   project: string
   enabledToolsets: Array<string>
-  activeMission: { missionId: string; summary: string; recentEvents: Array<string> } | null
-  latestHandoff: { path: string; content: string } | null
+  activeMission: {
+    missionId: string
+    summary: string
+    recentEvents: Array<string>
+  } | null
+  latestHandoff:
+    | (SwarmHandoffEnvelope & { path: string; content: string })
+    | null
   latestEpisode: { date: string; content: string } | null
   rendered: string
 }
 
-export function buildSwarmStartupSnapshot(input: SwarmStartupSnapshotInput): SwarmStartupSnapshot {
+export function buildSwarmStartupSnapshot(
+  input: SwarmStartupSnapshotInput,
+): SwarmStartupSnapshot {
   const { workerId } = input
-  if (!validateSwarmId(workerId)) throw new Error(`Invalid workerId: ${workerId}`)
-  const identity = readTextIfExists(join(swarmWorkerMemoryRoot(workerId), 'IDENTITY.md'))
+  if (!validateSwarmId(workerId))
+    throw new Error(`Invalid workerId: ${workerId}`)
+  const identity = readTextIfExists(
+    join(swarmWorkerMemoryRoot(workerId), 'IDENTITY.md'),
+  )
   const durableMemory = readTextIfExists(profileFile(workerId, 'MEMORY.md'))
   const persona = readTextIfExists(profileFile(workerId, 'SOUL.md'))
   const user = readTextIfExists(profileFile(workerId, 'USER.md'))
@@ -505,7 +815,10 @@ export function buildSwarmStartupSnapshot(input: SwarmStartupSnapshotInput): Swa
   const activeMissionId = input.missionId ?? readActiveMissionId(workerId)
   let activeMission: SwarmStartupSnapshot['activeMission'] = null
   if (activeMissionId) {
-    const summaryPath = join(swarmWorkerMissionMemoryRoot(workerId, activeMissionId), 'SUMMARY.md')
+    const summaryPath = join(
+      swarmWorkerMissionMemoryRoot(workerId, activeMissionId),
+      'SUMMARY.md',
+    )
     if (existsSync(summaryPath)) {
       activeMission = {
         missionId: activeMissionId,
@@ -515,14 +828,33 @@ export function buildSwarmStartupSnapshot(input: SwarmStartupSnapshotInput): Swa
     }
   }
 
-  const sharedHandoffPath = join(SWARM_SHARED_HANDOFF_ROOT, `${workerId}-latest.md`)
+  const sharedHandoffPath = join(
+    SWARM_SHARED_HANDOFF_ROOT,
+    `${workerId}-latest.md`,
+  )
   let latestHandoff: SwarmStartupSnapshot['latestHandoff'] = null
-  if (existsSync(sharedHandoffPath)) {
-    latestHandoff = { path: sharedHandoffPath, content: readTextIfExists(sharedHandoffPath) }
-  } else if (activeMissionId) {
-    const localHandoff = join(swarmWorkerHandoffsRoot(workerId), `${activeMissionId}.md`)
-    if (existsSync(localHandoff)) {
-      latestHandoff = { path: localHandoff, content: readTextIfExists(localHandoff) }
+  if (activeMissionId) {
+    const maxAgeMs = Math.max(
+      0,
+      input.maxHandoffAgeMs ?? DEFAULT_HANDOFF_MAX_AGE_MS,
+    )
+    const localHandoff = join(
+      swarmWorkerHandoffsRoot(workerId),
+      `${activeMissionId}.md`,
+    )
+    latestHandoff = readValidatedHandoff({
+      path: localHandoff,
+      workerId,
+      missionId: activeMissionId,
+      maxAgeMs,
+    })
+    if (!latestHandoff) {
+      latestHandoff = readValidatedHandoff({
+        path: sharedHandoffPath,
+        workerId,
+        missionId: activeMissionId,
+        maxAgeMs,
+      })
     }
   }
 
@@ -536,8 +868,11 @@ export function buildSwarmStartupSnapshot(input: SwarmStartupSnapshotInput): Swa
 
   const renderedSections: Array<string> = []
   renderedSections.push('## Worker Startup Memory Snapshot')
-  renderedSections.push(`Worker: ${workerId}${input.role ? ` — ${input.role}` : ''}${input.specialty ? ` (${input.specialty})` : ''}`)
-  if (input.rosterMission) renderedSections.push(`Mission focus: ${input.rosterMission}`)
+  renderedSections.push(
+    `Worker: ${workerId}${input.role ? ` — ${input.role}` : ''}${input.specialty ? ` (${input.specialty})` : ''}`,
+  )
+  if (input.rosterMission)
+    renderedSections.push(`Mission focus: ${input.rosterMission}`)
   if (enabledToolsets.length) {
     renderedSections.push('### Enabled tools')
     renderedSections.push(enabledToolsets.join(', '))
@@ -563,7 +898,9 @@ export function buildSwarmStartupSnapshot(input: SwarmStartupSnapshotInput): Swa
     renderedSections.push(tail(activeMission.summary, maxMission))
     if (activeMission.recentEvents.length) {
       renderedSections.push('Recent events:')
-      renderedSections.push(activeMission.recentEvents.map((line) => `- ${line}`).join('\n'))
+      renderedSections.push(
+        activeMission.recentEvents.map((line) => `- ${line}`).join('\n'),
+      )
     }
   }
   if (latestEpisode) {
