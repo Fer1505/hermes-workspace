@@ -1,6 +1,10 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import {
+  LEARNED_MEMORY_RELATIVE_PATH,
+  USER_PROFILE_RELATIVE_PATH,
+} from './profile-memory-contract'
 
 export type MemoryFileMeta = {
   path: string
@@ -17,9 +21,7 @@ export type MemorySearchMatch = {
 
 function isBrowserMemoryPath(relativePath: string): boolean {
   return (
-    relativePath === 'MEMORY.md' ||
-    relativePath.startsWith('memory/') ||
-    relativePath.startsWith('memories/')
+    relativePath.startsWith('memory/') || relativePath.startsWith('memories/')
   )
 }
 
@@ -27,12 +29,24 @@ function normalizeWorkspaceRoot(): string {
   // Honor HERMES_HOME when set (e.g. ~/.hermes-vanilla for running alongside prod).
   // Fall back to ~/.hermes for the default install location.
   const envHome = (process.env.HERMES_HOME || process.env.CLAUDE_HOME)?.trim()
-  const resolved = envHome ? path.resolve(envHome) : path.resolve(path.join(os.homedir(), '.hermes'))
+  const resolved = envHome
+    ? path.resolve(envHome)
+    : path.resolve(path.join(os.homedir(), '.hermes'))
   return resolved
 }
 
 export function getMemoryWorkspaceRoot(): string {
   return path.resolve(normalizeWorkspaceRoot())
+}
+
+function isPathWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return (
+    relative === '' ||
+    (relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  )
 }
 
 function normalizeRelativeMemoryPath(input: string): string {
@@ -52,12 +66,26 @@ export function resolveMemoryFilePath(relativePath: string): {
   relativePath: string
 } {
   const safeRelativePath = normalizeRelativeMemoryPath(relativePath)
+  if (!isBrowserMemoryPath(safeRelativePath)) {
+    throw new Error('Path is outside the canonical memory namespaces')
+  }
   const workspaceRoot = getMemoryWorkspaceRoot()
   const fullPath = path.resolve(workspaceRoot, safeRelativePath)
-  if (!fullPath.startsWith(workspaceRoot)) {
+  if (!isPathWithinRoot(workspaceRoot, fullPath)) {
     throw new Error('Resolved path is outside workspace')
   }
-  return { fullPath, relativePath: safeRelativePath }
+  const realWorkspaceRoot = fs.realpathSync(workspaceRoot)
+  const realFullPath = fs.realpathSync(fullPath)
+  if (!isPathWithinRoot(realWorkspaceRoot, realFullPath)) {
+    throw new Error('Resolved path is outside workspace')
+  }
+  const realRelativePath = path
+    .relative(realWorkspaceRoot, realFullPath)
+    .replace(/\\/g, '/')
+  if (!isBrowserMemoryPath(realRelativePath)) {
+    throw new Error('Resolved path is outside the canonical memory namespaces')
+  }
+  return { fullPath: realFullPath, relativePath: safeRelativePath }
 }
 
 function pushIfMarkdownFile(
@@ -68,11 +96,11 @@ function pushIfMarkdownFile(
   if (!fullPath.toLowerCase().endsWith('.md')) return
   let stats: fs.Stats
   try {
-    stats = fs.statSync(fullPath)
+    stats = fs.lstatSync(fullPath)
   } catch {
     return
   }
-  if (!stats.isFile()) return
+  if (stats.isSymbolicLink() || !stats.isFile()) return
 
   const relativePath = path
     .relative(workspaceRoot, fullPath)
@@ -96,6 +124,13 @@ function walkWorkspaceDir(
   workspaceRoot: string,
   dirPath: string,
 ) {
+  try {
+    const rootStats = fs.lstatSync(dirPath)
+    if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return
+  } catch {
+    return
+  }
+
   let dirEntries: Array<string>
   try {
     dirEntries = fs.readdirSync(dirPath)
@@ -107,10 +142,11 @@ function walkWorkspaceDir(
     const fullPath = path.join(dirPath, name)
     let stats: fs.Stats
     try {
-      stats = fs.statSync(fullPath)
+      stats = fs.lstatSync(fullPath)
     } catch {
       continue
     }
+    if (stats.isSymbolicLink()) continue
     if (stats.isDirectory()) {
       if (shouldSkipDirectory(name)) continue
       walkWorkspaceDir(entries, workspaceRoot, fullPath)
@@ -121,8 +157,26 @@ function walkWorkspaceDir(
 }
 
 function compareMemoryFiles(a: MemoryFileMeta, b: MemoryFileMeta): number {
-  if (a.path === 'MEMORY.md' && b.path !== 'MEMORY.md') return -1
-  if (b.path === 'MEMORY.md' && a.path !== 'MEMORY.md') return 1
+  if (
+    a.path === LEARNED_MEMORY_RELATIVE_PATH &&
+    b.path !== LEARNED_MEMORY_RELATIVE_PATH
+  )
+    return -1
+  if (
+    b.path === LEARNED_MEMORY_RELATIVE_PATH &&
+    a.path !== LEARNED_MEMORY_RELATIVE_PATH
+  )
+    return 1
+  if (
+    a.path === USER_PROFILE_RELATIVE_PATH &&
+    b.path !== USER_PROFILE_RELATIVE_PATH
+  )
+    return -1
+  if (
+    b.path === USER_PROFILE_RELATIVE_PATH &&
+    a.path !== USER_PROFILE_RELATIVE_PATH
+  )
+    return 1
 
   const aIsDaily = /^memories?\/\d{4}-\d{2}-\d{2}\.md$/.test(a.path)
   const bIsDaily = /^memories?\/\d{4}-\d{2}-\d{2}\.md$/.test(b.path)
@@ -137,7 +191,6 @@ export function listMemoryFiles(): Array<MemoryFileMeta> {
   const workspaceRoot = getMemoryWorkspaceRoot()
   const results: Array<MemoryFileMeta> = []
 
-  pushIfMarkdownFile(results, workspaceRoot, path.join(workspaceRoot, 'MEMORY.md'))
   for (const subdir of ['memory', 'memories']) {
     walkWorkspaceDir(results, workspaceRoot, path.join(workspaceRoot, subdir))
   }

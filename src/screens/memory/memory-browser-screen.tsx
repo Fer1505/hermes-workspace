@@ -59,11 +59,13 @@ function isDailyMemoryPath(pathValue: string): boolean {
 }
 
 function splitFiles(files: Array<MemoryFileMeta>) {
-  const rootMemory = files.find((file) => file.path === 'MEMORY.md') || null
+  const rootMemory =
+    files.find((file) => file.path === 'memories/MEMORY.md') || null
   const memoryFiles = files
     .filter(
       (file) =>
-        file.path.startsWith('memory/') || file.path.startsWith('memories/'),
+        file.path !== 'memories/MEMORY.md' &&
+        (file.path.startsWith('memory/') || file.path.startsWith('memories/')),
     )
     .sort((a, b) => {
       if (isDailyMemoryPath(a.path) && isDailyMemoryPath(b.path)) {

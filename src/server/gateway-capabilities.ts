@@ -987,8 +987,9 @@ export async function probeGateway(options?: {
       sessions: dashboard.available || legacySessions,
       enhancedChat,
       skills: dashboard.available || legacySkills,
-      // Memory is always available: workspace reads $HERMES_HOME/MEMORY.md +
-      // memory/*.md + memories/*.md directly from the local filesystem.
+      // Memory is always available: Workspace reads canonical learned state
+      // from $HERMES_HOME/memories/ plus runtime state from memory/. Retired
+      // root-level MEMORY.md / USER.md decoys are never consulted.
       // No remote gateway endpoint is required.
       memory: true,
       config: dashboard.available || legacyConfig,

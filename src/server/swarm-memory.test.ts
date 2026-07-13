@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -81,6 +87,62 @@ describe('swarm-memory module', () => {
       'utf8',
     )
     expect(episodes).toMatch(/Dispatched test work/)
+  })
+
+  it('loads only canonical nested learned memory and ignores root decoys', async () => {
+    const profileRoot = join(tempHome, '.hermes', 'profiles', 'swarmtest1')
+    const learnedRoot = join(profileRoot, 'memories')
+    mkdirSync(learnedRoot, { recursive: true })
+    writeFileSync(join(profileRoot, 'MEMORY.md'), 'ROOT MEMORY DECOY')
+    writeFileSync(join(profileRoot, 'USER.md'), 'ROOT USER DECOY')
+    writeFileSync(join(profileRoot, 'SOUL.md'), 'Canonical doctrine')
+    writeFileSync(
+      join(learnedRoot, 'MEMORY.md'),
+      'Canonical learned rendezvous fact',
+    )
+    writeFileSync(join(learnedRoot, 'USER.md'), 'Canonical user preference')
+
+    const mod = await loadModule()
+    mod.ensureWorkerMemoryScaffold({ workerId: 'swarmtest1' })
+    const snapshot = mod.buildSwarmStartupSnapshot({
+      workerId: 'swarmtest1',
+    })
+
+    expect(snapshot.contractVersion).toBe('olympus.profile-memory/v1')
+    expect(snapshot.durableMemory).toContain('Canonical learned')
+    expect(snapshot.user).toContain('Canonical user')
+    expect(snapshot.persona).toContain('Canonical doctrine')
+    expect(snapshot.rendered).toContain('memories/MEMORY.md')
+    expect(snapshot.rendered).toContain('Canonical user preference')
+    expect(snapshot.rendered).not.toContain('ROOT MEMORY DECOY')
+    expect(snapshot.rendered).not.toContain('ROOT USER DECOY')
+
+    const profile = mod.readSwarmMemory({
+      workerId: 'swarmtest1',
+      kind: 'profile',
+    })
+    expect(profile.contractVersion).toBe('olympus.profile-memory/v1')
+    expect(profile.files.map((file) => file.path)).toContain(
+      join(learnedRoot, 'MEMORY.md'),
+    )
+    expect(
+      profile.files.every(
+        (file) => file.path !== join(profileRoot, 'MEMORY.md'),
+      ),
+    ).toBe(true)
+
+    expect(
+      mod.searchSwarmMemory({
+        workerId: 'swarmtest1',
+        query: 'rendezvous',
+      }),
+    ).toHaveLength(1)
+    expect(
+      mod.searchSwarmMemory({
+        workerId: 'swarmtest1',
+        query: 'DECOY',
+      }),
+    ).toHaveLength(0)
   })
 
   it('preserves twenty concurrent mission events and summary updates', async () => {
