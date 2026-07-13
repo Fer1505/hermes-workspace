@@ -30,6 +30,11 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
+      - name: Verify immutable GitHub Action pins
+        run: |
+          node --test scripts/verify-github-actions-pins.node-tests.mjs
+          node scripts/verify-github-actions-pins.mjs
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -72,6 +77,11 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
+      - name: Verify immutable GitHub Action pins
+        run: |
+          node --test scripts/verify-github-actions-pins.node-tests.mjs
+          node scripts/verify-github-actions-pins.mjs
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -99,6 +109,11 @@ jobs:
         with:
           node-version: '22'
           cache: 'pnpm'
+
+      - name: Verify immutable GitHub Action pins
+        run: |
+          node --test scripts/verify-github-actions-pins.node-tests.mjs
+          node scripts/verify-github-actions-pins.mjs
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
