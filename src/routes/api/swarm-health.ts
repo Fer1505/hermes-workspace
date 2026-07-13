@@ -85,10 +85,11 @@ function readWorkerConfig(profilePath: string): { model: string; provider: strin
   }
 }
 
-function formatModelDisplay(model: string, provider: string): string {
+export function formatModelDisplay(model: string, provider: string): string {
   const value = `${model} ${provider}`.toLowerCase()
   if (value.includes('claude-opus-4-7') || value.includes('opus-4-7')) return 'Opus 4.7'
   if (value.includes('claude-opus-4-6') || value.includes('opus-4-6')) return 'Opus 4.6'
+  if (value.includes('gpt-5.6-sol')) return 'GPT-5.6 Sol'
   if (value.includes('gpt-5.5')) return 'GPT-5.5'
   if (value.includes('gpt-5.4')) return 'GPT-5.4'
   if (value.includes('gpt-5.3')) return 'GPT-5.3'

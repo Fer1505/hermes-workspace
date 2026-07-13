@@ -1,5 +1,5 @@
 /**
- * Resolve a roster `model:` display string (e.g. "Opus 4.7", "GPT-5.5",
+ * Resolve a roster `model:` display string (e.g. "Opus 4.7", "GPT-5.6 Sol",
  * "PC1 Coder") into the concrete `provider` + `default` model id pair
  * that Hermes Agent's `config.yaml` expects.
  *
@@ -47,6 +47,13 @@ export function resolveSwarmModelLabel(
   }
 
   // OpenAI Codex family
+  if (
+    /^gpt[- ]?5\.6(?:[- ]sol)?$|^codex\s*\(?gpt[- ]?5\.6(?:[- ]sol)?\)?$/.test(
+      normalized,
+    )
+  ) {
+    return { provider: 'openai-codex', default: 'gpt-5.6-sol' }
+  }
   if (/^gpt[- ]?5\.5$|^codex\s*\(?gpt[- ]?5\.5\)?$/.test(normalized)) {
     return { provider: 'openai-codex', default: 'gpt-5.5' }
   }

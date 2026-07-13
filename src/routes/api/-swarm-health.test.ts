@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { parseModelAuthEventsFromText, resolveWorkerWrapperName, summarizeSwarmHealth } from './swarm-health'
+import {
+  formatModelDisplay,
+  parseModelAuthEventsFromText,
+  resolveWorkerWrapperName,
+  summarizeSwarmHealth,
+} from './swarm-health'
 
 describe('swarm-health model/auth readiness', () => {
+  it('renders the explicit Sol route without collapsing it to an older family', () => {
+    expect(formatModelDisplay('gpt-5.6-sol', 'openai-codex')).toBe(
+      'GPT-5.6 Sol',
+    )
+  })
+
   it('uses roster wrapper aliases when resolving semantic worker wrappers', () => {
     expect(resolveWorkerWrapperName('builder', { wrapper: 'builder:task' })).toBe('builder:task')
     expect(resolveWorkerWrapperName('builder', { wrapper: '  ' })).toBe('builder')

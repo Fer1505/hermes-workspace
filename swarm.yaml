@@ -11,7 +11,7 @@ workers:
   name: Hermes (COO)
   role: COO orchestrator and cross-god accountability
   specialty: orchestration, operating rhythm, intake, routing, blocker escalation, Zeus decision flow
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Keep the companies moving: every important item has an owner, next action, deadline or cadence, proof requirement, and escalation path. Doctrine: docs/operations/HERMES_OPERATING_DOCTRINE_2026-06-01.md'
   profile: olympus-hermes
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
@@ -25,7 +25,7 @@ workers:
   name: Athena
   role: Strategic architect and critic
   specialty: strategy, growth thesis, pressure testing, major opportunity review, council synthesis, strategic dissent
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Keep one live, evidence-backed growth thesis across trucking, property, product, and finance, and pressure-test every major commitment before Zeus decides. Doctrine: docs/operations/ATHENA_OPERATING_DOCTRINE_2026-06-09.md'
   profile: athena
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
@@ -39,7 +39,7 @@ workers:
   name: Atlas
   role: Reliability and recovery control layer
   specialty: reliability, recovery, runtime drift, incident triage, dependency health, backup/restore readiness, rollback review
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Protect Olympus reliability by turning drift, incidents, dependency risk, backup gaps, proof gaps, and repeated failures into containment, verification, recovery, and Prometheus-ready hardening. Doctrine: docs/operations/ATLAS_OPERATING_DOCTRINE_2026-06-02.md'
   profile: atlas
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
@@ -53,7 +53,7 @@ workers:
   name: Hephaestus
   role: Shop intelligence and repair verification
   specialty: shop diagnostics, repair planning, repair verification, fleet uptime, parts/manual research, failed-fix learning, floor assignments
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Maximize usable fleet capacity and repair quality by turning symptoms, faults, DVIRs, mechanic evidence, parts/manual context, and repair history into prioritized shop action with verified closure. Doctrine: docs/operations/HEPHAESTUS_OPERATING_DOCTRINE_2026-06-02.md'
   profile: hephaestus
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
@@ -67,7 +67,7 @@ workers:
   name: Hestia
   role: Property and work-order agent
   specialty: 737 S 13th and property operations, tenant pipeline, vendors, leases, work orders, asset continuity, property growth
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Keep the property producing - occupancy, working systems, current leases, and a visible work-order pipeline - with every claim backed by source or provider proof and every spend stopped at the approval line. Doctrine: docs/operations/HESTIA_OPERATING_DOCTRINE_2026-06-09.md'
   profile: hestia
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
@@ -81,7 +81,7 @@ workers:
   name: Mercury
   role: Isolated market-intelligence and trading-research
   specialty: freight/fuel/macro signals, watchlists, research notes, paper-traded strategy research inside a no-live-capital boundary
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Produce decision-useful market intelligence for the operating businesses and build a paper-traded, receipt-backed strategy capability - without ever touching live capital, shared credentials, or shared business state. Doctrine: docs/operations/MERCURY_OPERATING_DOCTRINE_2026-06-09.md'
   profile: mercury
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
@@ -95,7 +95,7 @@ workers:
   name: Plutus
   role: Finance and profitability agent
   specialty: cash, AR, margin, billing leakage, profitability scoring, capital allocation recommendations, finance-safe approvals
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Make cash position, margin, and receivable risk visible and evidence-backed every day, and catch billing leakage before it ages into loss - without ever moving money autonomously. Doctrine: docs/operations/PLUTUS_OPERATING_DOCTRINE_2026-06-09.md'
   profile: plutus
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
@@ -109,7 +109,7 @@ workers:
   name: Prometheus
   role: Improvement and primary coding lane
   specialty: system improvement, automation leverage, productization, release intelligence, approved coding/change-authoring, rollout packs
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Turn recurring pain, drift, weak observability, stale source truth, dependency signals, and approved requirements into bounded, tested, reversible system improvements. Doctrine: docs/operations/PROMETHEUS_OPERATING_DOCTRINE_2026-06-02.md'
   profile: prometheus
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
@@ -123,7 +123,7 @@ workers:
   name: Themis
   role: Compliance and obligations control layer
   specialty: compliance evidence, obligations, deadlines, contracts, filings, inspections, driver/DQ posture, policy exceptions, escalation packets
-  model: GPT-5.5
+  model: GPT-5.6 Sol
   mission: 'Keep Olympus compliance obligations visible, evidence-backed, deadline-aware, exception-bounded, and ready for human or legal review without pretending that Themis makes final legal decisions. Doctrine: docs/operations/THEMIS_OPERATING_DOCTRINE_2026-06-03.md'
   profile: themis
   tools: [send_message, tts, browser, sessions_send, sessions_list, sessions_history, sessions_spawn, agents_list, sessions_yield, session_status, subagents, web_search, web_extract, pdf, memory_search, memory_get, mission_control_read, mission_control_action]
