@@ -125,7 +125,7 @@ function parseExecNotification(text: string): ExecNotification | null {
 
   if (!name) {
     const withoutPrefix = trimmed.replace(/^Exec completed[:\s-]*/i, '').trim()
-    const nameMatch = withoutPrefix.match(/^([^\(\{\[]+?)(?:\s*\(|\s*$)/)
+    const nameMatch = withoutPrefix.match(/^([^({[]+?)(?:\s*\(|\s*$)/)
     if (nameMatch) name = nameMatch[1].trim()
   }
 
@@ -467,11 +467,11 @@ export function useChatHistory({
       : rawHistoryMessages
     const last = messages[messages.length - 1]
     const lastId =
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
       last && typeof (last as { id?: string }).id === 'string'
         ? (last as { id?: string }).id
         : ''
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
     const signature = `${messages.length}:${last?.role ?? ''}:${lastId}:${textFromMessage(last ?? { role: 'user', content: [] }).slice(-32)}`
     if (signature === stableHistorySignatureRef.current) {
       return stableHistoryMessagesRef.current

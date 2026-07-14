@@ -819,7 +819,7 @@ async function streamPortableConductorMission(params: {
   const decoder = new TextDecoder()
   let buffer = ''
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- reader.read() exits when done is true
+
   while (true) {
     const { done, value } = await reader.read()
     if (done) break

@@ -194,7 +194,7 @@ export function useMissionOrchestrator() {
   }, [closeAllStreams])
 
   const updateTasksForAgent = useCallback((agentId: string, status: TaskStatus) => {
-    let changedTasks: HubTask[] = []
+    const changedTasks: HubTask[] = []
 
     setMissionTasks((previous) => previous.map((task) => {
       if (task.agentId !== agentId || task.status === status) return task

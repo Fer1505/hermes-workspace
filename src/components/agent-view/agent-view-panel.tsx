@@ -187,9 +187,9 @@ function ocParseContextPct(payload: unknown): number {
     (root.totals as Record<string, unknown> | undefined) ??
     root
   return ocReadPercent(
-    (usage as Record<string, unknown>)?.contextPercent ??
-      (usage as Record<string, unknown>)?.context_percent ??
-      (usage as Record<string, unknown>)?.context ??
+    (usage)?.contextPercent ??
+      (usage)?.context_percent ??
+      (usage)?.context ??
       root?.contextPercent ??
       root?.context_percent,
   )

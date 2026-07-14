@@ -204,7 +204,7 @@ export const Route = createFileRoute('/api/swarm-tmux-start')({
         // pass `--model`, so this is the only way the roster value is
         // honored. Best-effort: unrecognised labels (typos, custom
         // models) are left as-is so a worker never gets wedged. See #236.
-        let modelSync: {
+        const modelSync: {
           attempted: boolean
           changed: boolean
           target?: string

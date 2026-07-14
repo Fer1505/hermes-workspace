@@ -285,9 +285,9 @@ describe('(c) partial fill keeps Install disabled', () => {
     await React.act(async () => { getInstallBtn(container).click() })
 
     // Fill only the arg, leave env empty
-    const argInput = container.querySelector(
+    const argInput = container.querySelector<HTMLInputElement>(
       '[data-testid="placeholder-input-args[1]"]',
-    ) as HTMLInputElement | null
+    )
     expect(argInput).not.toBeNull()
 
     await React.act(async () => {

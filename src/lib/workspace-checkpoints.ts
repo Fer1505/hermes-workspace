@@ -410,7 +410,7 @@ function parseDiffLineTotals(
     )
 
   if (!line) return null
-  const match = line.match(/^(.*?)\s+\|\s+(\d+)\s+([+\-]+)$/)
+  const match = line.match(/^(.*?)\s+\|\s+(\d+)\s+([+-]+)$/)
   if (!match) return null
   const markers = match[3] ?? ''
   return {

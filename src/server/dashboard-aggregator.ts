@@ -357,7 +357,7 @@ function normalizeCron(raw: unknown): DashboardCronSection | null {
   const recentFailures: DashboardCronSection['recentFailures'] = []
   for (const job of jobs) {
     if (!job || typeof job !== 'object') continue
-    const j = job as Record<string, unknown>
+    const j = job
     const state = readString(j.state || j.status).toLowerCase()
     if (state === 'paused') paused += 1
     else if (state === 'running') running += 1

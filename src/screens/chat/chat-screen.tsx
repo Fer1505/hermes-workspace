@@ -18,7 +18,7 @@ import {
   textFromMessage,
 } from './utils'
 import {
-  
+
   advanceStickyStreamingText,
   createOptimisticMessage,
   createResponseWaitSnapshot,
@@ -497,7 +497,6 @@ export function ChatScreen({
   const lastAssistantSignature = useRef('')
   const refreshHistoryRef = useRef<() => void>(() => {})
   const retriedQueuedMessageKeysRef = useRef(new Set<string>())
-  const hasSeenDisconnectRef = useRef(false)
   const hadErrorRef = useRef(false)
   const [pendingApprovals, setPendingApprovals] = useState<
     Array<ApprovalRequest>
@@ -2214,20 +2213,6 @@ export function ChatScreen({
   )
 
   useEffect(() => {
-    if (false) {
-      // Server connection checks removed — Hermes Agent uses direct API
-      hasSeenDisconnectRef.current = true
-      retriedQueuedMessageKeysRef.current.clear()
-      return
-    }
-
-    if (connectionState === 'connected' && hasSeenDisconnectRef.current) {
-      hasSeenDisconnectRef.current = false
-      flushRetryableMessages()
-    }
-  }, [connectionState, flushRetryableMessages])
-
-  useEffect(() => {
     if (statusError) {
       hadErrorRef.current = true
       retriedQueuedMessageKeysRef.current.clear()
@@ -2449,7 +2434,7 @@ export function ChatScreen({
       const attachmentPayload: Array<ChatAttachment> = attachments.map(
         (attachment) => ({
           ...attachment,
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
           id: attachment.id ?? crypto.randomUUID(),
         }),
       )
@@ -2641,7 +2626,7 @@ export function ChatScreen({
   }, [])
 
   const historyLoading =
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
     (historyQuery.isLoading && !historyQuery.data) || isRedirecting
   const historyEmpty = !historyLoading && finalDisplayMessages.length === 0
   const errorNotice = useMemo(() => {
@@ -2914,7 +2899,7 @@ export function ChatScreen({
               wrapperRef={composerRef}
               composerRef={composerHandleRef}
               embedded={embedded}
-              // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
               focusKey={`${isNewChat ? 'new' : activeFriendlyId}:${activeCanonicalKey ?? ''}`}
               thinkingLevel={thinkingLevel}
               onThinkingLevelChange={handleThinkingLevelChange}

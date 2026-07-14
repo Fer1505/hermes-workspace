@@ -235,7 +235,7 @@ export function SkillsScreen() {
   // pattern (active first, then default, then any).
   useEffect(() => {
     if (!profiles.length || selectedProfile) return
-    setSelectedProfile(activeProfileName || profiles[0]!.name)
+    setSelectedProfile(activeProfileName || profiles[0].name)
   }, [profiles, activeProfileName, selectedProfile])
 
   const effectiveProfile = selectedProfile || activeProfileName

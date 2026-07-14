@@ -142,6 +142,7 @@ function extractContent(msg: { content?: string | Array<{ type?: string; text?: 
 function sanitizeArgsPreview(args?: string): string {
   if (!args) return 'No arguments'
   const cleaned = args
+    // eslint-disable-next-line no-control-regex -- C0 and DEL bytes are intentionally removed from untrusted process output.
     .replace(/[\u0000-\u001F\u007F]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

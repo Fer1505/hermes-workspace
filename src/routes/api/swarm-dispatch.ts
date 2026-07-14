@@ -785,8 +785,7 @@ export function dispatchContainmentReason(input: {
   return null
 }
 
-function runWorker(assignment: AssignmentRequest, timeoutMs: number, roster: SwarmRosterWorker | undefined, options?: { waitForCheckpoint?: boolean; checkpointPollMs?: number; missionId?: string | null; notifySessionKey?: string | null }): Promise<WorkerResult> {
-  return new Promise(async (resolve) => {
+async function runWorker(assignment: AssignmentRequest, timeoutMs: number, roster: SwarmRosterWorker | undefined, options?: { waitForCheckpoint?: boolean; checkpointPollMs?: number; missionId?: string | null; notifySessionKey?: string | null }): Promise<WorkerResult> {
     const workerId = assignment.workerId
     const prompt = buildWorkerPrompt({
       workerId,
@@ -895,8 +894,7 @@ function runWorker(assignment: AssignmentRequest, timeoutMs: number, roster: Swa
         liveResult.checkpointStatus = 'not-requested'
       }
       recordDispatchBlock(workerId, assignment, liveResult, options)
-      resolve(liveResult)
-      return
+      return liveResult
     }
 
     if (!existsSync(profilePath)) {
@@ -911,8 +909,7 @@ function runWorker(assignment: AssignmentRequest, timeoutMs: number, roster: Swa
       }
       markDispatchResult(workerId, result)
       recordDispatchBlock(workerId, assignment, result, options)
-      resolve(result)
-      return
+      return result
     }
 
     const useWrapper = existsSync(wrapperPath)
@@ -928,7 +925,8 @@ function runWorker(assignment: AssignmentRequest, timeoutMs: number, roster: Swa
       env.GITHUB_TOKEN = ghToken
     }
 
-    const proc = execFile(
+    return new Promise((resolve) => {
+      const proc = execFile(
       cmd,
       args,
       {
@@ -1018,21 +1016,21 @@ function runWorker(assignment: AssignmentRequest, timeoutMs: number, roster: Swa
       },
     )
 
-    proc.on('error', (error) => {
-      const result: WorkerResult = {
-        workerId,
-        ok: false,
-        output: '',
-        error: error.message,
-        durationMs: Date.now() - startedAt,
-        exitCode: null,
-        delivery: 'oneshot',
-      }
-      markDispatchResult(workerId, result)
-      recordDispatchBlock(workerId, assignment, result, options)
-      resolve(result)
+      proc.on('error', (error) => {
+        const result: WorkerResult = {
+          workerId,
+          ok: false,
+          output: '',
+          error: error.message,
+          durationMs: Date.now() - startedAt,
+          exitCode: null,
+          delivery: 'oneshot',
+        }
+        markDispatchResult(workerId, result)
+        recordDispatchBlock(workerId, assignment, result, options)
+        resolve(result)
+      })
     })
-  })
 }
 
 export class SwarmDispatchError extends Error {

@@ -156,7 +156,7 @@ export function TerminalPanel({ isMobile }: TerminalPanelProps) {
           Math.max(MIN_HEIGHT, startHeight + delta),
         )
         setHeight(nextHeight)
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
         const fit = fitMap.current.get(activeTab?.id ?? '')
         fit?.fit()
       }
@@ -252,7 +252,7 @@ export function TerminalPanel({ isMobile }: TerminalPanelProps) {
     let buffer = ''
     let sessionId: string | undefined
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
@@ -356,7 +356,7 @@ export function TerminalPanel({ isMobile }: TerminalPanelProps) {
   }, [])
 
   useEffect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
     if (!activeTab?.sessionId) return
     const term = terminalMap.current.get(activeTab.id)
     if (!term) return
@@ -369,7 +369,7 @@ export function TerminalPanel({ isMobile }: TerminalPanelProps) {
         rows: term.rows,
       }),
     })
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
   }, [activeTab?.id, activeTab?.sessionId, height])
 
   if (isMobile) return null
@@ -414,7 +414,7 @@ export function TerminalPanel({ isMobile }: TerminalPanelProps) {
                     key={tab.id}
                     className={cn(
                       'flex items-center gap-2 rounded-full border px-3 py-1 text-xs',
-                      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
                       tab.id === activeTab?.id
                         ? 'border-primary-400 bg-primary-100 text-primary-900'
                         : 'border-primary-200 text-primary-700',
@@ -476,7 +476,7 @@ export function TerminalPanel({ isMobile }: TerminalPanelProps) {
               {tabs.map((tab) => (
                 <TerminalView
                   key={tab.id}
-                  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
                   isActive={tab.id === activeTab?.id}
                   onConnect={() => connectSession(tab.id)}
                   onInput={(data) => handleSendInput(tab.id, data)}

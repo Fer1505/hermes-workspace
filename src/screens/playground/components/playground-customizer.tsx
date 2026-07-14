@@ -34,7 +34,7 @@ export function PlaygroundCustomizer({ open, onClose, value, onChange }: Props) 
     if (open) setCfg(value ?? loadAvatarConfig())
   }, [open, value])
 
-  function update<K extends keyof AvatarConfig>(key: K, value: AvatarConfig[K]) {
+  function update<TKey extends keyof AvatarConfig>(key: TKey, value: AvatarConfig[TKey]) {
     const next = { ...cfg, [key]: value }
     setCfg(next)
     saveAvatarConfig(next)

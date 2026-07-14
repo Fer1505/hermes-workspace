@@ -77,7 +77,7 @@ export type DiscoveredProvider = {
 const PROBE_TTL_MS = 30_000 // re-probe every 30s
 const PROBE_TIMEOUT_MS = 800 // 800ms timeout per probe — local servers respond fast
 
-let discoveryState: Map<string, DiscoveredProvider> = new Map()
+const discoveryState: Map<string, DiscoveredProvider> = new Map()
 let lastProbeAll = 0
 let probePromise: Promise<void> | null = null
 

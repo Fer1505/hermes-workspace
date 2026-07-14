@@ -43,6 +43,6 @@ export function filterSessionsWithTombstones<
     }
     return true
   })
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
   return changed ? next : sessions
 }

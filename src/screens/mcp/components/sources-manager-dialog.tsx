@@ -88,7 +88,7 @@ function SourceForm({ initial, isEdit, onSave, onCancel, saving, serverErrors }:
     onSave(form)
   }
 
-  function set<K extends keyof AddSourceInput>(key: K, value: AddSourceInput[K]) {
+  function set<TKey extends keyof AddSourceInput>(key: TKey, value: AddSourceInput[TKey]) {
     setForm((prev) => ({ ...prev, [key]: value }))
     setLocalErrors((prev) => { const next = { ...prev }; delete next[key]; return next })
   }

@@ -203,7 +203,7 @@ async function refreshClaudeToken(
   if (body.refresh_token)
     creds.oauth.refreshToken = body.refresh_token as string
   if (typeof body.expires_in === 'number') {
-    creds.oauth.expiresAt = Date.now() + (body.expires_in as number) * 1000
+    creds.oauth.expiresAt = Date.now() + (body.expires_in) * 1000
   }
   creds.fullData.claudeAiOauth = creds.oauth
   saveClaudeCredentials(creds)
@@ -344,7 +344,7 @@ export async function fetchClaudeUsage(): Promise<ProviderUsageResult> {
     lines.push({
       type: 'progress',
       label: 'Session (5h)',
-      used: fiveHour.utilization as number,
+      used: fiveHour.utilization,
       limit: 100,
       format: 'percent',
       resetsAt: fiveHour.resets_at
@@ -358,7 +358,7 @@ export async function fetchClaudeUsage(): Promise<ProviderUsageResult> {
     lines.push({
       type: 'progress',
       label: 'Weekly',
-      used: sevenDay.utilization as number,
+      used: sevenDay.utilization,
       limit: 100,
       format: 'percent',
       resetsAt: sevenDay.resets_at
@@ -374,7 +374,7 @@ export async function fetchClaudeUsage(): Promise<ProviderUsageResult> {
     lines.push({
       type: 'progress',
       label: 'Sonnet',
-      used: sevenDaySonnet.utilization as number,
+      used: sevenDaySonnet.utilization,
       limit: 100,
       format: 'percent',
       resetsAt: sevenDaySonnet.resets_at
@@ -503,14 +503,14 @@ async function refreshCodexToken(auth: CodexAuth): Promise<string | null> {
   > | null
   if (!body?.access_token) return null
 
-  auth.tokens!.access_token = body.access_token as string
+  auth.tokens.access_token = body.access_token as string
   if (body.refresh_token)
-    auth.tokens!.refresh_token = body.refresh_token as string
-  if (body.id_token) auth.tokens!.id_token = body.id_token as string
+    auth.tokens.refresh_token = body.refresh_token as string
+  if (body.id_token) auth.tokens.id_token = body.id_token as string
   auth.last_refresh = new Date().toISOString()
   saveCodexAuth(auth)
 
-  return auth.tokens!.access_token
+  return auth.tokens.access_token
 }
 
 function getResetsAtIso(
@@ -522,7 +522,7 @@ function getResetsAtIso(
     return new Date(window.reset_at * 1000).toISOString()
   if (typeof window.reset_after_seconds === 'number')
     return new Date(
-      (nowSec + (window.reset_after_seconds as number)) * 1000,
+      (nowSec + (window.reset_after_seconds)) * 1000,
     ).toISOString()
   return undefined
 }
@@ -687,7 +687,7 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
       lines.push({
         type: 'progress',
         label: 'Session',
-        used: primaryWindow.used_percent as number,
+        used: primaryWindow.used_percent,
         limit: 100,
         format: 'percent',
         resetsAt: getResetsAtIso(nowSec, primaryWindow),
@@ -697,7 +697,7 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
       lines.push({
         type: 'progress',
         label: 'Weekly',
-        used: secondaryWindow.used_percent as number,
+        used: secondaryWindow.used_percent,
         limit: 100,
         format: 'percent',
         resetsAt: getResetsAtIso(nowSec, secondaryWindow),
@@ -710,7 +710,7 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
     lines.push({
       type: 'progress',
       label: 'Reviews',
-      used: reviewWindow.used_percent as number,
+      used: reviewWindow.used_percent,
       limit: 100,
       format: 'percent',
       resetsAt: getResetsAtIso(nowSec, reviewWindow),

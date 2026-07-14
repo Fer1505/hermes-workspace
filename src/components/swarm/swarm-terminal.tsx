@@ -170,9 +170,9 @@ export const SwarmTerminal = memo(function SwarmTerminal({
 
       focusTerminal()
 
-      const viewport = containerRef.current.querySelector(
+      const viewport = containerRef.current.querySelector<HTMLElement>(
         '.xterm-viewport',
-      ) as HTMLElement | null
+      )
       const wheelHandler = (event: WheelEvent) => {
         // Make wheel scrolling reliably review terminal scrollback instead of
         // being interpreted as shell/tmux history navigation.
@@ -242,7 +242,7 @@ export const SwarmTerminal = memo(function SwarmTerminal({
       window.addEventListener('resize', handleResize)
 
       try {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+
         while (true) {
           const readState = await reader.read().catch(() => ({ done: true, value: undefined }))
           if (readState.done) break

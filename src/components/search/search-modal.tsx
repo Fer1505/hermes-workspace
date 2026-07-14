@@ -374,7 +374,7 @@ export function SearchModal() {
       if (/^[1-9]$/.test(event.key)) {
         const index = Number(event.key) - 1
         const target = resultItems[index]
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
         if (!target) return
         event.preventDefault()
         const finalQuery = debouncedQuery.trim() || query.trim()
@@ -473,7 +473,7 @@ export function SearchModal() {
                   onHoverIndex={(index) => setSelectedIndex(index)}
                   onSelectIndex={(index) => {
                     const item = resultItems[index]
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
                     if (!item) return
                     const finalQuery = debouncedQuery.trim() || query.trim()
                     if (finalQuery) recordRecentSearch(finalQuery)

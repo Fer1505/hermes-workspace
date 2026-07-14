@@ -127,7 +127,7 @@ export function updateTask(taskId: string, updates: UpdateTaskInput): TaskRecord
   const index = file.tasks.findIndex((task) => task.id === taskId)
   if (index === -1) return null
 
-  const current = normalizeTask(file.tasks[index] as TaskRecord)
+  const current = normalizeTask(file.tasks[index])
   const next = normalizeTask({
     ...current,
     ...updates,
@@ -151,7 +151,7 @@ export function deleteTask(taskId: string): boolean {
   const file = readTaskFile()
   const nextTasks = file.tasks.filter((task) => task.id !== taskId)
   if (nextTasks.length === file.tasks.length) return false
-  writeTaskFile({ tasks: nextTasks.map((task) => normalizeTask(task as TaskRecord)) })
+  writeTaskFile({ tasks: nextTasks.map((task) => normalizeTask(task)) })
   return true
 }
 

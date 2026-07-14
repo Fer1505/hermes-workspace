@@ -344,7 +344,7 @@ function ClassicalPillars({ world }: { world: WorldDef }) {
   return (
     <>
       {pillars.map((pos, i) => (
-        <group key={i} position={pos as [number, number, number]}>
+        <group key={i} position={pos}>
           <mesh castShadow receiveShadow position={[0, 1.5, 0]}>
             <cylinderGeometry args={[0.4, 0.5, 3, 12]} />
             <meshStandardMaterial color={world.pillarColor} roughness={0.6} />
@@ -397,7 +397,7 @@ function TechPillars({ world }: { world: WorldDef }) {
   return (
     <>
       {cubes.map((pos, i) => (
-        <group key={i} position={pos as [number, number, number]}>
+        <group key={i} position={pos}>
           <mesh castShadow position={[0, 0.9, 0]}>
             <boxGeometry args={[1.6, 1.8, 1.6]} />
             <meshStandardMaterial color="#0f172a" emissive={world.pillarColor} emissiveIntensity={0.4} roughness={0.3} />

@@ -368,7 +368,7 @@ async function fetchRoster(): Promise<Array<SwarmRosterWorker>> {
   const res = await fetch('/api/swarm-roster')
   if (!res.ok) throw new Error(`Roster request failed: ${res.status}`)
   const data = (await res.json()) as SwarmRosterResponse
-  return Array.isArray(data.roster?.workers) ? data.roster!.workers! : []
+  return Array.isArray(data.roster?.workers) ? data.roster.workers : []
 }
 
 async function fetchMissions(): Promise<Array<SwarmMissionSummary>> {
@@ -1134,7 +1134,7 @@ export function Swarm2Screen() {
           } else {
             toast(`Failed to start ${workerId}: ${msg}`, { type: 'error' })
           }
-          // eslint-disable-next-line no-console
+
           console.error('[swarm2] start session failed:', res.status, text)
         }
       } catch (err) {
@@ -1165,7 +1165,7 @@ export function Swarm2Screen() {
         })
         if (!res.ok) {
           const text = await res.text().catch(() => '')
-          // eslint-disable-next-line no-console
+
           console.error('[swarm2] stop session failed:', res.status, text)
         }
       } finally {
@@ -1190,11 +1190,11 @@ export function Swarm2Screen() {
         })
         if (!res.ok) {
           const text = await res.text().catch(() => '')
-          // eslint-disable-next-line no-console
+
           console.error('[swarm2] tmux scroll failed:', res.status, text)
         }
       } catch (error) {
-        // eslint-disable-next-line no-console
+
         console.error('[swarm2] tmux scroll exception:', error)
       }
     },

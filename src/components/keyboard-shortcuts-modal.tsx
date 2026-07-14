@@ -48,7 +48,7 @@ export function KeyboardShortcutsModal() {
         !event.ctrlKey &&
         !event.altKey
       ) {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
         const tag = (event.target as HTMLElement)?.tagName?.toLowerCase()
 
         if (

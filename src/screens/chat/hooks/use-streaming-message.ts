@@ -446,7 +446,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
         typeof window !== 'undefined' &&
         window.localStorage?.getItem('hermes:debug:sse') === '1'
       ) {
-         
+
         console.log(
           '[hermes-sse]',
           event,
@@ -560,7 +560,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
           // model thinking and would otherwise pollute the TUI activity card.
           const isKeepalivePlaceholder =
             typeof thinking === 'string' &&
-            /^still\s+working[\.\u2026]*\s*$/i.test(thinking.trim())
+            /^still\s+working[.\u2026]*\s*$/i.test(thinking.trim())
           if (isKeepalivePlaceholder) break
           if (thinking) {
             markActivity()
@@ -932,7 +932,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
         const decoder = new TextDecoder()
         let buffer = ''
 
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
         while (true) {
           const { done, value } = await reader.read()
           if (done) break

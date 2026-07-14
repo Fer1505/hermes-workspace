@@ -19,7 +19,7 @@
     "test:audit": "vitest run src/server/swarm-foundation.test.ts src/routes/api/-swarm-kanban.test.ts electron/external-url-policy.test.ts",
     "smoke:managed": "node scripts/managed-companion-smoke.mjs",
     "playground:ws": "node scripts/playground-ws.mjs",
-    "lint": "eslint",
+    "lint": "eslint src electron/*.ts e2e playwright.config.ts",
     "lint:audit": "eslint src/routes/api/swarm-kanban.ts src/routes/api/-swarm-kanban.test.ts electron/external-url-policy.cjs electron/external-url-policy.test.ts electron/main.cjs src/server/swarm-foundation.ts src/server/swarm-foundation.test.ts",
     "typecheck:audit": "tsc --project tsconfig.audit.json --noEmit",
     "format": "prettier",

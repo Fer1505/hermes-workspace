@@ -82,7 +82,7 @@ describe('swarm-missions', () => {
       title: 'Dedup test',
       assignments: [{ workerId: 'swarm2', task: 'Land backend patch', reviewRequired: false }],
     })
-    const assignmentId = mission.assignments[0]?.id as string
+    const assignmentId = mission.assignments[0]?.id
     const checkpoint = {
       stateLabel: 'DONE' as const,
       runtimeState: 'idle' as const,

@@ -4,7 +4,7 @@ import {
   SWARM2_INFORMATION_HIERARCHY,
   SWARM2_OPERATIONS_REUSE,
   SWARM2_REAL_API_ENDPOINTS,
-  SWARM2_SURFACE_CONTRACT,
+  SWARM2_SURFACE_CONTRACT, __runtimeTabInternals , buildVisibleSwarmMembers
 } from './swarm2-screen'
 
 describe('Swarm2 surface contract', () => {
@@ -81,8 +81,6 @@ describe('Swarm2 surface contract', () => {
   })
 })
 
-import { __runtimeTabInternals } from './swarm2-screen'
-import { buildVisibleSwarmMembers } from './swarm2-screen'
 import { resolveSwarmOrchestratorDefaultName } from './swarm2-orchestrator-card'
 import type { CrewMember } from '@/hooks/use-crew-status'
 

@@ -941,7 +941,7 @@ export function Conductor() {
       const s = sessions.find((session) => {
         const label = `${session.label ?? ''} ${session.title ?? ''} ${session.derivedTitle ?? ''} ${session.key ?? ''}`.toLowerCase()
         return label.includes(profileId) || label.includes(profileName)
-      }) as GatewaySession | undefined
+      })
       const updatedAt = typeof s?.updatedAt === 'string' ? new Date(s.updatedAt).getTime() : typeof s?.updatedAt === 'number' ? s.updatedAt : 0
       const statusText = `${s?.status ?? ''} ${s?.kind ?? ''}`.toLowerCase()
       const status = !s ? ('idle' as const) : /error|failed/.test(statusText) ? ('error' as const) : /pause/.test(statusText) ? ('paused' as const) : Date.now() - updatedAt < 120_000 ? ('active' as const) : ('idle' as const)
@@ -1082,7 +1082,7 @@ export function Conductor() {
   const filteredSessions = (() => {
     const sessions = conductor.recentSessions
     if (activityFilter === 'all') return sessions
-    return sessions.filter((session) => ((session.label as string) ?? '').startsWith('worker-')).filter((session) => deriveSessionStatus(session as GatewaySession) === activityFilter)
+    return sessions.filter((session) => ((session.label as string) ?? '').startsWith('worker-')).filter((session) => deriveSessionStatus(session) === activityFilter)
   })()
   const activityItems: Array<MissionHistoryEntry | GatewaySession> = hasMissionHistory ? filteredHistory : filteredSessions
   const ACTIVITY_PAGE_SIZE = 3

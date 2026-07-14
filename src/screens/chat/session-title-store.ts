@@ -47,7 +47,7 @@ function ensureLoaded() {
           Object.entries(parsed as Record<string, PersistedTitle>).map(
             ([key, value]) => {
               const normalized: PersistedTitle = {}
-              // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
               if (value && typeof value === 'object') {
                 if (
                   typeof value.title === 'string' &&
@@ -147,7 +147,7 @@ export function useSessionTitles() {
 
 export function useSessionTitleInfo(friendlyId: string): SessionTitleInfo {
   const map = useSessionTitles()
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
   return friendlyId && map[friendlyId]
     ? map[friendlyId]
     : { status: 'idle', error: null }

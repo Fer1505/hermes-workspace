@@ -18,7 +18,7 @@ function mergeSessionTitle(
   const derivedTitle = hasManualTitle
     ? session.derivedTitle
     : (stored.title ?? session.derivedTitle)
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime safety
+
   const titleStatus = stored.status ?? session.titleStatus
   const titleSource = hasManualTitle
     ? 'manual'
