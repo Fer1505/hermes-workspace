@@ -96,8 +96,10 @@ export function setGatewayUrl(input: string | null | undefined): string {
   }
   writeOverrides(overrides)
   // Force reprobe on the next capability check.
+  probeEpoch += 1
   probePromise = null
   lastProbeAt = 0
+  capabilities = { ...capabilities, probed: false }
   return CLAUDE_API
 }
 
@@ -119,11 +121,14 @@ export function setDashboardUrl(input: string | null | undefined): string {
     )
   }
   writeOverrides(overrides)
+  probeEpoch += 1
   probePromise = null
   lastProbeAt = 0
-  dashboardTokenCache = ''
-  dashboardAuthRequiredCache = undefined
-  dashboardAuthRequiredPromise = null
+  capabilities = {
+    ...capabilities,
+    probed: false,
+    dashboard: { available: false, url: CLAUDE_DASHBOARD_URL },
+  }
   return CLAUDE_DASHBOARD_URL
 }
 
@@ -166,9 +171,6 @@ function effectiveProbeTtl(caps: {
   if (caps.health || caps.chatCompletions) return PROBE_TTL_MS
   return PROBE_TTL_DISCONNECTED_MS
 }
-const DASHBOARD_TOKEN_REGEX =
-  /window\._+(?:CLAUDE|HERMES)_+SESSION_+TOKEN__+\s*=\s*["']([^"']+)["']/
-
 // ── Types ─────────────────────────────────────────────────────────
 
 export type CoreCapabilities = {
@@ -295,14 +297,9 @@ let capabilities: GatewayCapabilities = {
 }
 
 let probePromise: Promise<GatewayCapabilities> | null = null
+let probeEpoch = 0
 let lastProbeAt = 0
 let lastLoggedSummary = ''
-let dashboardTokenPromise: Promise<string> | null = null
-let dashboardTokenCache = ''
-// undefined = not probed, null = legacy dashboard without auth_required.
-let dashboardAuthRequiredCache: boolean | null | undefined
-let dashboardAuthRequiredPromise: Promise<boolean | null | undefined> | null =
-  null
 
 /** Optional bearer token for authenticated gateway endpoints. */
 export const BEARER_TOKEN =
@@ -310,112 +307,25 @@ export const BEARER_TOKEN =
 
 /**
  * Gateway bearer credentials are deliberately separate from dashboard auth.
- * Current dashboards either need no credential (loopback) or use a browser
- * cookie/single-use WebSocket ticket (gated). A root-HTML token exists only on
- * older dashboards and is handled by the bounded compatibility fallback below.
+ * Hermes 0.19+ dashboards either need no reusable credential (loopback) or
+ * use a browser cookie/single-use WebSocket ticket (gated). Workspace never
+ * reads a credential from dashboard HTML or a copied dashboard-token env var.
  */
 function authHeaders(): Record<string, string> {
   return BEARER_TOKEN ? { Authorization: `Bearer ${BEARER_TOKEN}` } : {}
 }
 
 /**
- * Read the current dashboard's public auth shape. `null` means a successful
- * status response came from a dashboard that predates `auth_required` and may
- * still use the legacy root-HTML token contract. `undefined` means status was
- * unavailable or malformed and must fail closed without scraping HTML.
+ * Compatibility export retained while callers migrate off the retired token
+ * contract. This is intentionally network-free. Scraping root HTML exposed a
+ * reusable secret to a server-side process and allowed URL-switch races to
+ * carry an old origin's token to a new origin. Hermes 0.19+ requires neither.
  */
-async function fetchDashboardAuthRequired(options?: {
-  force?: boolean
-}): Promise<boolean | null | undefined> {
-  const force = options?.force === true
-  if (!force && dashboardAuthRequiredCache !== undefined) {
-    return dashboardAuthRequiredCache
-  }
-  if (!force && dashboardAuthRequiredPromise) {
-    return dashboardAuthRequiredPromise
-  }
-
-  dashboardAuthRequiredPromise = (async () => {
-    try {
-      const res = await fetch(`${CLAUDE_DASHBOARD_URL}/api/status`, {
-        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      })
-      if (!res.ok) return undefined
-      const body = (await res.json()) as { auth_required?: unknown }
-      const value =
-        typeof body.auth_required === 'boolean' ? body.auth_required : null
-      dashboardAuthRequiredCache = value
-      return value
-    } catch {
-      return undefined
-    }
-  })()
-
-  try {
-    return await dashboardAuthRequiredPromise
-  } finally {
-    dashboardAuthRequiredPromise = null
-  }
-}
-
-/**
- * Resolve a legacy dashboard session token when, and only when, public status
- * does not expose the current auth contract. Current loopback dashboards need
- * no token; current gated dashboards use cookies/tickets and must never have
- * their root HTML scraped for a reusable credential.
- */
-export async function fetchDashboardToken(options?: {
+export function fetchDashboardToken(options?: {
   force?: boolean
 }): Promise<string> {
-  const force = options?.force === true
-
-  if (!force && dashboardTokenCache) return dashboardTokenCache
-  if (!force && dashboardTokenPromise) return dashboardTokenPromise
-
-  dashboardTokenPromise = (async () => {
-    const authRequired = await fetchDashboardAuthRequired({ force })
-    if (authRequired !== null) {
-      dashboardTokenCache = ''
-      return ''
-    }
-
-    // Dashboard injects the session token inline on `/` (root), not on
-    // `/index.html` on legacy releases. Current releases are handled above.
-    // If a legacy dashboard requires auth (302 → /auth/login) or the login
-    // page is broken (500), return empty so protected calls degrade safely.
-    try {
-      const res = await fetch(`${CLAUDE_DASHBOARD_URL}/`, {
-        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      })
-      if (!res.ok) {
-        console.warn(
-          `[gateway] Dashboard index returned ${res.status} — token unavailable`,
-        )
-        return ''
-      }
-      const html = await res.text()
-      const token = html.match(DASHBOARD_TOKEN_REGEX)?.[1]?.trim() || ''
-      if (!token) {
-        console.warn(
-          '[gateway] Dashboard session token not found in root HTML',
-        )
-        return ''
-      }
-      dashboardTokenCache = token
-      return token
-    } catch (err) {
-      console.warn(
-        `[gateway] Failed to fetch dashboard token: ${err instanceof Error ? err.message : err}`,
-      )
-      return ''
-    }
-  })()
-
-  try {
-    return await dashboardTokenPromise
-  } finally {
-    dashboardTokenPromise = null
-  }
+  void options
+  return Promise.resolve('')
 }
 
 export async function getDashboardToken(options?: {
@@ -424,11 +334,11 @@ export async function getDashboardToken(options?: {
   return fetchDashboardToken(options)
 }
 
-export async function dashboardAuthHeaders(options?: {
+export function dashboardAuthHeaders(options?: {
   force?: boolean
 }): Promise<Record<string, string>> {
-  const token = await getDashboardToken(options)
-  return token ? { 'X-Hermes-Session-Token': token } : {}
+  void options
+  return Promise.resolve({})
 }
 
 function withDashboardBase(path: string): string {
@@ -442,7 +352,7 @@ export async function dashboardFetch(
 ): Promise<Response> {
   const requestPath = withDashboardBase(path)
   const method = (init.method || 'GET').toUpperCase()
-  const doFetch = async (forceToken = false) => {
+  const doFetch = async () => {
     const headers = new Headers(init.headers)
     const isProtected =
       requestPath.includes('/api/') &&
@@ -459,7 +369,7 @@ export async function dashboardFetch(
       !headers.has('X-Hermes-Session-Token') &&
       !headers.has('Authorization')
     ) {
-      const auth = await dashboardAuthHeaders({ force: forceToken })
+      const auth = await dashboardAuthHeaders()
       for (const [key, value] of Object.entries(auth)) {
         headers.set(key, value)
       }
@@ -472,12 +382,7 @@ export async function dashboardFetch(
     })
   }
 
-  let res = await doFetch(false)
-  if (res.status === 401) {
-    dashboardTokenCache = ''
-    res = await doFetch(true)
-  }
-  return res
+  return doFetch()
 }
 
 /**
@@ -746,26 +651,101 @@ async function probeMcpConfigKey(): Promise<boolean> {
   }
 }
 
-async function probeDashboard(): Promise<{ available: boolean; url: string }> {
+const MAX_DASHBOARD_STATUS_BYTES = 64 * 1024
+
+type CurrentDashboardStatus = {
+  version: string
+  auth_required: boolean
+}
+
+function isCurrentDashboardVersion(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const match = value.match(/^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/)
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  return major > 0 || minor >= 19
+}
+
+async function readBoundedText(
+  response: Response,
+  maxBytes: number,
+): Promise<string | null> {
+  const advertisedLength = response.headers.get('content-length')
+  if (advertisedLength !== null) {
+    const length = Number(advertisedLength)
+    if (!Number.isSafeInteger(length) || length < 0 || length > maxBytes) {
+      return null
+    }
+  }
+
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
   try {
-    const res = await fetch(`${CLAUDE_DASHBOARD_URL}/api/status`, {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        return null
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  const combined = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    combined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(combined)
+}
+
+async function fetchCurrentDashboardStatus(
+  dashboardUrl: string,
+): Promise<CurrentDashboardStatus | null> {
+  try {
+    const res = await fetch(`${dashboardUrl}/api/status`, {
+      headers: { Accept: 'application/json' },
+      redirect: 'error',
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
-    if (!res.ok) return { available: false, url: CLAUDE_DASHBOARD_URL }
-    const body = (await res.json()) as {
-      version?: string
-      auth_required?: unknown
+    if (!res.ok) return null
+    const contentType = (res.headers.get('content-type') ?? '')
+      .split(';', 1)[0]
+      .trim()
+      .toLowerCase()
+    if (contentType !== 'application/json') return null
+    const raw = await readBoundedText(res, MAX_DASHBOARD_STATUS_BYTES)
+    if (raw === null) return null
+    const body = JSON.parse(raw) as unknown
+    if (body === null || typeof body !== 'object') return null
+    const record = body as Record<string, unknown>
+    if (
+      !isCurrentDashboardVersion(record.version) ||
+      typeof record.auth_required !== 'boolean'
+    ) {
+      return null
     }
-    if (!body.version) return { available: false, url: CLAUDE_DASHBOARD_URL }
-    dashboardAuthRequiredCache =
-      typeof body.auth_required === 'boolean' ? body.auth_required : null
-    if (dashboardAuthRequiredCache === null) {
-      await fetchDashboardToken().catch(() => '')
+    return {
+      version: record.version,
+      auth_required: record.auth_required,
     }
-    return { available: true, url: CLAUDE_DASHBOARD_URL }
   } catch {
-    return { available: false, url: CLAUDE_DASHBOARD_URL }
+    return null
   }
+}
+
+async function probeDashboard(): Promise<{ available: boolean; url: string }> {
+  const dashboardUrl = CLAUDE_DASHBOARD_URL
+  const status = await fetchCurrentDashboardStatus(dashboardUrl)
+  return { available: status !== null, url: dashboardUrl }
 }
 
 /**
@@ -966,16 +946,9 @@ async function autoDetectDashboardUrl(): Promise<void> {
 
   const candidates = ['http://127.0.0.1:9119']
   for (const candidate of candidates) {
-    try {
-      const res = await fetch(`${candidate}/api/status`, {
-        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      })
-      if (res.ok) {
-        CLAUDE_DASHBOARD_URL = candidate
-        return
-      }
-    } catch {
-      // continue
+    if (await fetchCurrentDashboardStatus(candidate)) {
+      CLAUDE_DASHBOARD_URL = candidate
+      return
     }
   }
 }
@@ -991,8 +964,15 @@ export async function probeGateway(options?: {
     return probePromise
   }
 
-  probePromise = (async () => {
+  const invocationEpoch = probeEpoch
+  const currentPromise = (async () => {
     await Promise.all([autoDetectGatewayUrl(), autoDetectDashboardUrl()])
+    if (invocationEpoch !== probeEpoch) {
+      return probeGateway({ force: true })
+    }
+    const runEpoch = probeEpoch
+    const runGatewayUrl = CLAUDE_API
+    const runDashboardUrl = CLAUDE_DASHBOARD_URL
 
     const [
       api,
@@ -1018,9 +998,15 @@ export async function probeGateway(options?: {
       probeDashboard(),
     ])
 
-    // Strict MCP probe runs after dashboard probe so dashboard token
-    // resolution (in-page HTML scrape fallback) has had a chance to populate
-    // the cache when the dashboard is up.
+    if (
+      runEpoch !== probeEpoch ||
+      runGatewayUrl !== CLAUDE_API ||
+      runDashboardUrl !== CLAUDE_DASHBOARD_URL
+    ) {
+      return probeGateway({ force: true })
+    }
+
+    // Strict MCP probe runs after dashboard availability is established.
     const mcp = await probeMcp()
 
     // Conductor probe runs after dashboard probe.
@@ -1037,6 +1023,18 @@ export async function probeGateway(options?: {
       dashboardConfigAvailable &&
       isLocalhostDeployment() &&
       (await probeMcpConfigKey())
+
+    // A URL setter invalidates an in-flight probe. Commit only observations
+    // collected for the still-current URL pair; otherwise join/start the new
+    // epoch's single flight. This also prevents an older finally block from
+    // clearing a newer promise.
+    if (
+      runEpoch !== probeEpoch ||
+      runGatewayUrl !== CLAUDE_API ||
+      runDashboardUrl !== CLAUDE_DASHBOARD_URL
+    ) {
+      return probeGateway({ force: true })
+    }
 
     capabilities = {
       health: health || api.available,
@@ -1065,11 +1063,12 @@ export async function probeGateway(options?: {
     logCapabilities(capabilities)
     return capabilities
   })()
+  probePromise = currentPromise
 
   try {
-    return await probePromise
+    return await currentPromise
   } finally {
-    probePromise = null
+    if (probePromise === currentPromise) probePromise = null
   }
 }
 

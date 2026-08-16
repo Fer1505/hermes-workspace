@@ -179,101 +179,231 @@ describe('gateway-capabilities', () => {
   })
 
   describe('dashboard authentication contract', () => {
-    it('does not scrape current loopback dashboards that explicitly disable auth', async () => {
-      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url === 'http://127.0.0.1:9119/api/status') {
-          return new Response(
-            JSON.stringify({ version: '0.12.0', auth_required: false }),
-            { headers: { 'content-type': 'application/json' } },
-          )
-        }
-        throw new Error(`unexpected dashboard request: ${url}`)
-      })
+    it('keeps token compatibility exports network-free for current dashboards', async () => {
+      const mod = await loadMod()
+      await expect(mod.fetchDashboardToken()).resolves.toBe('')
+      await expect(mod.fetchDashboardToken({ force: true })).resolves.toBe('')
+      await expect(mod.dashboardAuthHeaders()).resolves.toEqual({})
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
 
+    it('ignores copied and legacy inline dashboard tokens', async () => {
+      process.env.HERMES_DASHBOARD_TOKEN = 'copied-token'
+      process.env.CLAUDE_DASHBOARD_TOKEN = 'also-copied'
       const mod = await loadMod()
       await expect(mod.fetchDashboardToken()).resolves.toBe('')
       await expect(mod.dashboardAuthHeaders()).resolves.toEqual({})
-      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock).not.toHaveBeenCalled()
     })
 
-    it('does not scrape current gated dashboards for a reusable credential', async () => {
-      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url === 'http://127.0.0.1:9119/api/status') {
-          return new Response(
-            JSON.stringify({ version: '0.12.0', auth_required: true }),
-            { headers: { 'content-type': 'application/json' } },
-          )
-        }
-        throw new Error(`unexpected dashboard request: ${url}`)
-      })
-
+    it('never retries a 401 with a reusable dashboard token', async () => {
+      fetchMock.mockResolvedValue(new Response('unauthorized', { status: 401 }))
       const mod = await loadMod()
-      await expect(mod.fetchDashboardToken()).resolves.toBe('')
-      await expect(mod.dashboardAuthHeaders()).resolves.toEqual({})
+      const response = await mod.dashboardFetch('/api/sessions')
+      expect(response.status).toBe(401)
       expect(fetchMock).toHaveBeenCalledTimes(1)
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers)
+      expect(headers.has('X-Hermes-Session-Token')).toBe(false)
+      expect(headers.has('Authorization')).toBe(false)
     })
 
-    it('scrapes the inline dashboard session token from root HTML', async () => {
-      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-        if (String(input).endsWith('/api/status')) {
-          return new Response(JSON.stringify({ version: '0.11.0' }), {
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        return new Response(
-          '<html><head><script>window.__HERMES_SESSION_TOKEN__="fresh-token";</script></head></html>',
-          { headers: { 'content-type': 'text/html' } },
-        )
+    it('keeps an in-flight request on its captured origin across a URL switch', async () => {
+      let releaseOld!: () => void
+      let oldStarted!: () => void
+      const oldStartedPromise = new Promise<void>((resolve) => {
+        oldStarted = resolve
       })
-
-      const mod = await loadMod()
-      await expect(mod.fetchDashboardToken()).resolves.toBe('fresh-token')
-      expect(fetchMock).toHaveBeenCalledWith(
-        'http://127.0.0.1:9119/',
-        expect.objectContaining({ signal: expect.anything() }),
+      const releaseOldPromise = new Promise<void>((resolve) => {
+        releaseOld = resolve
+      })
+      fetchMock.mockImplementation(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input)
+          const headers = new Headers(init?.headers)
+          expect(headers.has('X-Hermes-Session-Token')).toBe(false)
+          expect(headers.has('Authorization')).toBe(false)
+          if (url === 'http://old-origin.test/api/sessions') {
+            oldStarted()
+            await releaseOldPromise
+            return new Response('old')
+          }
+          if (url === 'http://new-origin.test/api/sessions') {
+            return new Response('new')
+          }
+          throw new Error(`unexpected dashboard request: ${url}`)
+        },
       )
-    })
-
-    it('ignores copied dashboard token env vars and scrapes the current token instead', async () => {
-      process.env.HERMES_DASHBOARD_TOKEN = 'stale-token'
-      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-        if (String(input).endsWith('/api/status')) {
-          return new Response(JSON.stringify({ version: '0.11.0' }), {
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        return new Response(
-          '<html><head><script>window.__HERMES_SESSION_TOKEN__="live-token";</script></head></html>',
-          { headers: { 'content-type': 'text/html' } },
-        )
+      const mod = await loadMod()
+      mod.setDashboardUrl('http://old-origin.test')
+      const oldRequest = mod.dashboardFetch('/api/sessions')
+      await oldStartedPromise
+      mod.setDashboardUrl('http://new-origin.test')
+      await expect(mod.dashboardFetch('/api/sessions')).resolves.toMatchObject({
+        status: 200,
       })
+      releaseOld()
+      await expect(oldRequest).resolves.toMatchObject({ status: 200 })
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        'http://old-origin.test/api/sessions',
+        'http://new-origin.test/api/sessions',
+      ])
+    })
+  })
+
+  describe('current dashboard status contract', () => {
+    it.each([
+      [
+        'a pre-0.19 legacy version',
+        () =>
+          new Response(
+            JSON.stringify({ version: '0.18.9', auth_required: false }),
+            { headers: { 'content-type': 'application/json' } },
+          ),
+      ],
+      [
+        'a missing auth_required field',
+        () =>
+          new Response(JSON.stringify({ version: '0.19.0' }), {
+            headers: { 'content-type': 'application/json' },
+          }),
+      ],
+      [
+        'an HTML content type',
+        () =>
+          new Response(
+            JSON.stringify({ version: '0.19.0', auth_required: false }),
+            { headers: { 'content-type': 'text/html' } },
+          ),
+      ],
+      [
+        'an oversized advertised body',
+        () =>
+          new Response(
+            JSON.stringify({ version: '0.19.0', auth_required: false }),
+            {
+              headers: {
+                'content-type': 'application/json',
+                'content-length': String(64 * 1024 + 1),
+              },
+            },
+          ),
+      ],
+    ])('rejects %s without requesting root HTML', async (_label, status) => {
+      process.env.HERMES_API_URL = 'http://gateway.test'
+      process.env.HERMES_DASHBOARD_URL = 'http://dashboard.test'
+      fetchMock.mockImplementation(
+        (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input)
+          if (url === 'http://dashboard.test/api/status') {
+            expect(init?.redirect).toBe('error')
+            expect(new Headers(init?.headers).get('Accept')).toBe(
+              'application/json',
+            )
+            return status()
+          }
+          return new Response(null, { status: 404 })
+        },
+      )
 
       const mod = await loadMod()
-      await expect(mod.fetchDashboardToken()).resolves.toBe('live-token')
+      const caps = await mod.probeGateway({ force: true })
+      expect(caps.dashboard).toEqual({
+        available: false,
+        url: 'http://dashboard.test',
+      })
       expect(
-        fetchMock.mock.calls.some(([url]) => url === 'http://127.0.0.1:9119/'),
-      ).toBe(true)
+        fetchMock.mock.calls.some(
+          ([input]) => String(input) === 'http://dashboard.test/',
+        ),
+      ).toBe(false)
     })
 
-    it('uses the dashboard session-token header for dashboard API auth', async () => {
-      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-        if (String(input).endsWith('/api/status')) {
-          return new Response(JSON.stringify({ version: '0.11.0' }), {
-            headers: { 'content-type': 'application/json' },
-          })
+    it('accepts the Hermes 0.19+ JSON auth contract', async () => {
+      process.env.HERMES_API_URL = 'http://gateway.test'
+      process.env.HERMES_DASHBOARD_URL = 'http://dashboard.test'
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        if (String(input) === 'http://dashboard.test/api/status') {
+          return new Response(
+            JSON.stringify({ version: '0.19.0', auth_required: false }),
+            { headers: { 'content-type': 'application/json; charset=utf-8' } },
+          )
         }
-        return new Response(
-          '<html><script>window.__HERMES_SESSION_TOKEN__="header-token";</script></html>',
-          { headers: { 'content-type': 'text/html' } },
-        )
+        return new Response(null, { status: 404 })
       })
 
       const mod = await loadMod()
-      await expect(mod.dashboardAuthHeaders()).resolves.toEqual({
-        'X-Hermes-Session-Token': 'header-token',
+      const caps = await mod.probeGateway({ force: true })
+      expect(caps.dashboard).toEqual({
+        available: true,
+        url: 'http://dashboard.test',
       })
+    })
+
+    it('uses one current-epoch probe while an invalidated probe finishes', async () => {
+      process.env.HERMES_API_URL = 'http://gateway.test'
+      process.env.HERMES_DASHBOARD_URL = 'http://old-dashboard.test'
+      let oldStarted!: () => void
+      let newStarted!: () => void
+      let releaseOld!: () => void
+      let releaseNew!: () => void
+      const oldStartedPromise = new Promise<void>((resolve) => {
+        oldStarted = resolve
+      })
+      const newStartedPromise = new Promise<void>((resolve) => {
+        newStarted = resolve
+      })
+      const oldGate = new Promise<void>((resolve) => {
+        releaseOld = resolve
+      })
+      const newGate = new Promise<void>((resolve) => {
+        releaseNew = resolve
+      })
+      let newStatusRequests = 0
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === 'http://old-dashboard.test/api/status') {
+          oldStarted()
+          await oldGate
+          return new Response(
+            JSON.stringify({ version: '0.19.0', auth_required: false }),
+            { headers: { 'content-type': 'application/json' } },
+          )
+        }
+        if (url === 'http://new-dashboard.test/api/status') {
+          newStatusRequests += 1
+          newStarted()
+          await newGate
+          return new Response(
+            JSON.stringify({ version: '0.19.0', auth_required: false }),
+            { headers: { 'content-type': 'application/json' } },
+          )
+        }
+        return new Response(null, { status: 404 })
+      })
+
+      const mod = await loadMod()
+      const oldProbe = mod.probeGateway({ force: true })
+      await oldStartedPromise
+      mod.setDashboardUrl('http://new-dashboard.test')
+      const newProbe = mod.probeGateway({ force: true })
+      await newStartedPromise
+      releaseOld()
+      await Promise.resolve()
+      const joinedProbe = mod.probeGateway({ force: true })
+      expect(newStatusRequests).toBe(1)
+      releaseNew()
+      const [oldCaps, newCaps, joinedCaps] = await Promise.all([
+        oldProbe,
+        newProbe,
+        joinedProbe,
+      ])
+      for (const caps of [oldCaps, newCaps, joinedCaps]) {
+        expect(caps.dashboard).toEqual({
+          available: true,
+          url: 'http://new-dashboard.test',
+        })
+      }
+      expect(newStatusRequests).toBe(1)
     })
   })
 
@@ -313,20 +443,11 @@ describe('gateway-capabilities', () => {
     })
   })
 
-  it('fails closed without scraping root HTML when public status fails', async () => {
-    fetchMock.mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: async () => 'Internal Server Error',
-    })
-
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('does not touch dashboard status or root HTML when resolving auth headers', async () => {
     const mod = await loadMod()
-
     await expect(mod.fetchDashboardToken()).resolves.toBe('')
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(warnSpy).not.toHaveBeenCalled()
-    warnSpy.mockRestore()
+    await expect(mod.dashboardAuthHeaders()).resolves.toEqual({})
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('does not mark Conductor available when dashboard returns SPA HTML fallback', async () => {
@@ -336,17 +457,15 @@ describe('gateway-capabilities', () => {
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         if (url === 'http://dashboard.test/api/status') {
-          return new Response(JSON.stringify({ version: '0.12.0' }), {
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        if (url === 'http://dashboard.test/') {
           return new Response(
-            "<script>window.__CLAUDE_SESSION_TOKEN__ = 'test-token'</script>",
+            JSON.stringify({ version: '0.19.0', auth_required: false }),
             {
-              headers: { 'content-type': 'text/html' },
+            headers: { 'content-type': 'application/json' },
             },
           )
+        }
+        if (url === 'http://dashboard.test/') {
+          throw new Error('dashboard root must not be requested')
         }
         if (url === 'http://dashboard.test/api/conductor/missions') {
           return new Response('<!doctype html><div id="root"></div>', {
@@ -403,17 +522,15 @@ describe('gateway-capabilities', () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
         if (url === 'http://dashboard.test/api/status') {
-          return new Response(JSON.stringify({ version: '0.12.0' }), {
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        if (url === 'http://dashboard.test/') {
           return new Response(
-            "<script>window.__CLAUDE_SESSION_TOKEN__ = 'test-token'</script>",
+            JSON.stringify({ version: '0.19.0', auth_required: false }),
             {
-              headers: { 'content-type': 'text/html' },
+            headers: { 'content-type': 'application/json' },
             },
           )
+        }
+        if (url === 'http://dashboard.test/') {
+          throw new Error('dashboard root must not be requested')
         }
         if (url === 'http://dashboard.test/api/conductor/missions') {
           return new Response(JSON.stringify({ missions: [] }), {
