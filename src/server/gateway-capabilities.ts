@@ -121,6 +121,9 @@ export function setDashboardUrl(input: string | null | undefined): string {
   writeOverrides(overrides)
   probePromise = null
   lastProbeAt = 0
+  dashboardTokenCache = ''
+  dashboardAuthRequiredCache = undefined
+  dashboardAuthRequiredPromise = null
   return CLAUDE_DASHBOARD_URL
 }
 
@@ -296,25 +299,68 @@ let lastProbeAt = 0
 let lastLoggedSummary = ''
 let dashboardTokenPromise: Promise<string> | null = null
 let dashboardTokenCache = ''
+// undefined = not probed, null = legacy dashboard without auth_required.
+let dashboardAuthRequiredCache: boolean | null | undefined
+let dashboardAuthRequiredPromise: Promise<boolean | null> | null = null
 
 /** Optional bearer token for authenticated gateway endpoints. */
 export const BEARER_TOKEN =
   process.env.HERMES_API_TOKEN || process.env.CLAUDE_API_TOKEN || ''
 
 /**
- * Dashboard API auth uses the ephemeral session token injected into the
- * dashboard root HTML at startup. Do not reuse gateway bearer tokens here and
- * do not trust a manually copied dashboard token env var — it goes stale every
- * time the dashboard restarts.
+ * Gateway bearer credentials are deliberately separate from dashboard auth.
+ * Current dashboards either need no credential (loopback) or use a browser
+ * cookie/single-use WebSocket ticket (gated). A root-HTML token exists only on
+ * older dashboards and is handled by the bounded compatibility fallback below.
  */
 function authHeaders(): Record<string, string> {
   return BEARER_TOKEN ? { Authorization: `Bearer ${BEARER_TOKEN}` } : {}
 }
 
 /**
- * Resolve the current dashboard session token by scraping the dashboard root
- * HTML. The dashboard injects a fresh ephemeral token at boot, so cached or
- * manually copied env tokens become invalid after restarts.
+ * Read the current dashboard's public auth shape. `null` means the dashboard
+ * predates the explicit `auth_required` field and may still use the legacy
+ * root-HTML session-token contract.
+ */
+async function fetchDashboardAuthRequired(options?: {
+  force?: boolean
+}): Promise<boolean | null> {
+  const force = options?.force === true
+  if (!force && dashboardAuthRequiredCache !== undefined) {
+    return dashboardAuthRequiredCache
+  }
+  if (!force && dashboardAuthRequiredPromise) {
+    return dashboardAuthRequiredPromise
+  }
+
+  dashboardAuthRequiredPromise = (async () => {
+    try {
+      const res = await fetch(`${CLAUDE_DASHBOARD_URL}/api/status`, {
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      })
+      if (!res.ok) return null
+      const body = (await res.json()) as { auth_required?: unknown }
+      const value =
+        typeof body.auth_required === 'boolean' ? body.auth_required : null
+      dashboardAuthRequiredCache = value
+      return value
+    } catch {
+      return null
+    }
+  })()
+
+  try {
+    return await dashboardAuthRequiredPromise
+  } finally {
+    dashboardAuthRequiredPromise = null
+  }
+}
+
+/**
+ * Resolve a legacy dashboard session token when, and only when, public status
+ * does not expose the current auth contract. Current loopback dashboards need
+ * no token; current gated dashboards use cookies/tickets and must never have
+ * their root HTML scraped for a reusable credential.
  */
 export async function fetchDashboardToken(options?: {
   force?: boolean
@@ -325,11 +371,16 @@ export async function fetchDashboardToken(options?: {
   if (!force && dashboardTokenPromise) return dashboardTokenPromise
 
   dashboardTokenPromise = (async () => {
+    const authRequired = await fetchDashboardAuthRequired({ force })
+    if (authRequired !== null) {
+      dashboardTokenCache = ''
+      return ''
+    }
+
     // Dashboard injects the session token inline on `/` (root), not on
-    // `/index.html` which serves the raw Vite-built HTML without the token.
-    // When the dashboard requires auth (302 → /auth/login) or the login page
-    // is broken (500), return empty string so protected API calls degrade
-    // gracefully — the caller already handles 401/non-ok via safeJson.
+    // `/index.html` on legacy releases. Current releases are handled above.
+    // If a legacy dashboard requires auth (302 → /auth/login) or the login
+    // page is broken (500), return empty so protected calls degrade safely.
     try {
       const res = await fetch(`${CLAUDE_DASHBOARD_URL}/`, {
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
@@ -699,9 +750,16 @@ async function probeDashboard(): Promise<{ available: boolean; url: string }> {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
     if (!res.ok) return { available: false, url: CLAUDE_DASHBOARD_URL }
-    const body = (await res.json()) as { version?: string }
+    const body = (await res.json()) as {
+      version?: string
+      auth_required?: unknown
+    }
     if (!body.version) return { available: false, url: CLAUDE_DASHBOARD_URL }
-    await fetchDashboardToken().catch(() => '')
+    dashboardAuthRequiredCache =
+      typeof body.auth_required === 'boolean' ? body.auth_required : null
+    if (dashboardAuthRequiredCache === null) {
+      await fetchDashboardToken().catch(() => '')
+    }
     return { available: true, url: CLAUDE_DASHBOARD_URL }
   } catch {
     return { available: false, url: CLAUDE_DASHBOARD_URL }
@@ -1110,4 +1168,10 @@ export function isClaudeConnected(): boolean {
   return capabilities.health || capabilities.dashboard.available
 }
 
-void ensureGatewayProbed()
+// The application primes capabilities at module load. Vitest imports this
+// module repeatedly with per-test fetch doubles; leaving a detached probe from
+// an old module graph lets it consume the next test's mock and creates false
+// cross-test network evidence. Tests call probeGateway explicitly instead.
+if (process.env.NODE_ENV !== 'test') {
+  void ensureGatewayProbed()
+}

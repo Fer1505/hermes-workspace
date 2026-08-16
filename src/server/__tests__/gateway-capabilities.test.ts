@@ -161,8 +161,8 @@ describe('gateway-capabilities', () => {
     })
     const mod = await loadMod()
     await mod.probeGateway({ force: true })
-    // The :9119 auto-detect probe must never have run, and the explicit
-    // :9120 URL must be preserved.
+    // The :9119 auto-detect probe must never run, and the explicit :9120 URL
+    // must be preserved.
     expect(
       fetchMock.mock.calls.some(
         ([u]) => u === 'http://127.0.0.1:9119/api/status',
@@ -178,7 +178,43 @@ describe('gateway-capabilities', () => {
     expect(resolved.source).toBe('default')
   })
 
-  describe('dashboard session token scraping', () => {
+  describe('dashboard authentication contract', () => {
+    it('does not scrape current loopback dashboards that explicitly disable auth', async () => {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === 'http://127.0.0.1:9119/api/status') {
+          return new Response(
+            JSON.stringify({ version: '0.12.0', auth_required: false }),
+            { headers: { 'content-type': 'application/json' } },
+          )
+        }
+        throw new Error(`unexpected dashboard request: ${url}`)
+      })
+
+      const mod = await loadMod()
+      await expect(mod.fetchDashboardToken()).resolves.toBe('')
+      await expect(mod.dashboardAuthHeaders()).resolves.toEqual({})
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not scrape current gated dashboards for a reusable credential', async () => {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === 'http://127.0.0.1:9119/api/status') {
+          return new Response(
+            JSON.stringify({ version: '0.12.0', auth_required: true }),
+            { headers: { 'content-type': 'application/json' } },
+          )
+        }
+        throw new Error(`unexpected dashboard request: ${url}`)
+      })
+
+      const mod = await loadMod()
+      await expect(mod.fetchDashboardToken()).resolves.toBe('')
+      await expect(mod.dashboardAuthHeaders()).resolves.toEqual({})
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
     it('scrapes the inline dashboard session token from root HTML', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
