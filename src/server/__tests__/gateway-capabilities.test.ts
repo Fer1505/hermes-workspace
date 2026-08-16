@@ -216,11 +216,16 @@ describe('gateway-capabilities', () => {
     })
 
     it('scrapes the inline dashboard session token from root HTML', async () => {
-      fetchMock.mockResolvedValue({
-        ok: true,
-        status: 200,
-        text: async () =>
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith('/api/status')) {
+          return new Response(JSON.stringify({ version: '0.11.0' }), {
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(
           '<html><head><script>window.__HERMES_SESSION_TOKEN__="fresh-token";</script></head></html>',
+          { headers: { 'content-type': 'text/html' } },
+        )
       })
 
       const mod = await loadMod()
@@ -233,11 +238,16 @@ describe('gateway-capabilities', () => {
 
     it('ignores copied dashboard token env vars and scrapes the current token instead', async () => {
       process.env.HERMES_DASHBOARD_TOKEN = 'stale-token'
-      fetchMock.mockResolvedValue({
-        ok: true,
-        status: 200,
-        text: async () =>
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith('/api/status')) {
+          return new Response(JSON.stringify({ version: '0.11.0' }), {
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(
           '<html><head><script>window.__HERMES_SESSION_TOKEN__="live-token";</script></head></html>',
+          { headers: { 'content-type': 'text/html' } },
+        )
       })
 
       const mod = await loadMod()
@@ -248,11 +258,16 @@ describe('gateway-capabilities', () => {
     })
 
     it('uses the dashboard session-token header for dashboard API auth', async () => {
-      fetchMock.mockResolvedValue({
-        ok: true,
-        status: 200,
-        text: async () =>
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith('/api/status')) {
+          return new Response(JSON.stringify({ version: '0.11.0' }), {
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(
           '<html><script>window.__HERMES_SESSION_TOKEN__="header-token";</script></html>',
+          { headers: { 'content-type': 'text/html' } },
+        )
       })
 
       const mod = await loadMod()
@@ -298,7 +313,7 @@ describe('gateway-capabilities', () => {
     })
   })
 
-  it('returns an empty token instead of throwing when dashboard root fails', async () => {
+  it('fails closed without scraping root HTML when public status fails', async () => {
     fetchMock.mockResolvedValue({
       ok: false,
       status: 500,
@@ -309,9 +324,8 @@ describe('gateway-capabilities', () => {
     const mod = await loadMod()
 
     await expect(mod.fetchDashboardToken()).resolves.toBe('')
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[gateway] Dashboard index returned 500 — token unavailable',
-    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
 

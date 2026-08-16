@@ -301,7 +301,8 @@ let dashboardTokenPromise: Promise<string> | null = null
 let dashboardTokenCache = ''
 // undefined = not probed, null = legacy dashboard without auth_required.
 let dashboardAuthRequiredCache: boolean | null | undefined
-let dashboardAuthRequiredPromise: Promise<boolean | null> | null = null
+let dashboardAuthRequiredPromise: Promise<boolean | null | undefined> | null =
+  null
 
 /** Optional bearer token for authenticated gateway endpoints. */
 export const BEARER_TOKEN =
@@ -318,13 +319,14 @@ function authHeaders(): Record<string, string> {
 }
 
 /**
- * Read the current dashboard's public auth shape. `null` means the dashboard
- * predates the explicit `auth_required` field and may still use the legacy
- * root-HTML session-token contract.
+ * Read the current dashboard's public auth shape. `null` means a successful
+ * status response came from a dashboard that predates `auth_required` and may
+ * still use the legacy root-HTML token contract. `undefined` means status was
+ * unavailable or malformed and must fail closed without scraping HTML.
  */
 async function fetchDashboardAuthRequired(options?: {
   force?: boolean
-}): Promise<boolean | null> {
+}): Promise<boolean | null | undefined> {
   const force = options?.force === true
   if (!force && dashboardAuthRequiredCache !== undefined) {
     return dashboardAuthRequiredCache
@@ -338,14 +340,14 @@ async function fetchDashboardAuthRequired(options?: {
       const res = await fetch(`${CLAUDE_DASHBOARD_URL}/api/status`, {
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       })
-      if (!res.ok) return null
+      if (!res.ok) return undefined
       const body = (await res.json()) as { auth_required?: unknown }
       const value =
         typeof body.auth_required === 'boolean' ? body.auth_required : null
       dashboardAuthRequiredCache = value
       return value
     } catch {
-      return null
+      return undefined
     }
   })()
 
