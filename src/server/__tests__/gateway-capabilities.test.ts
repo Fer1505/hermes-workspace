@@ -34,6 +34,7 @@ vi.mock('node:os', () => ({
 beforeEach(() => {
   vi.clearAllMocks()
   vi.unstubAllGlobals()
+  homedir.mockReturnValue('/home/testuser')
   readFileSync.mockReturnValue('')
   fetchMock.mockReset()
   vi.stubGlobal('fetch', fetchMock)

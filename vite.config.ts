@@ -370,6 +370,8 @@ async function isClaudeAgentHealthy(port = 8642): Promise<boolean> {
 }
 
 const config = defineConfig(({ mode, command }) => {
+  const isTestMode =
+    mode === 'test' || process.env.VITEST === 'true'
   const env = loadEnv(mode, process.cwd(), '')
   // Bridge loadEnv into process.env for server-side SSR runtime code that
   // reads env vars directly from process.env (e.g. getBearerToken() in
@@ -950,6 +952,7 @@ const config = defineConfig(({ mode, command }) => {
           // Skip when launchd manages the gateway (HERMES_WORKSPACE_AUTO_START_AGENT=false)
           // to avoid SIGTERM cycle on close that nukes the launchd-managed process.
           const autoStartAgent =
+            !isTestMode &&
             process.env.HERMES_WORKSPACE_AUTO_START_AGENT !== 'false'
           if (command === 'serve' && autoStartAgent) {
             void startClaudeAgent()
@@ -966,6 +969,7 @@ const config = defineConfig(({ mode, command }) => {
           })
 
           if (
+            isTestMode ||
             command !== 'serve' ||
             workspaceDaemonStarted ||
             workspaceDaemonStarting

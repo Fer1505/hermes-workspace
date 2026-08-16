@@ -26,7 +26,7 @@ export const tourSteps: Array<Step> = [
         </p>
       </div>
     ),
-    disableBeacon: true,
+    skipBeacon: true,
   },
   // Step 2: Sidebar
   {

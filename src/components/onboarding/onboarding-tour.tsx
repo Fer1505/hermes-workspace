@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Joyride, { ACTIONS, STATUS } from 'react-joyride'
+import { ACTIONS, Joyride, STATUS } from 'react-joyride'
 import { tourSteps } from './tour-steps'
-import type { CallBackProps, Styles } from 'react-joyride'
+import type { EventData, Options, Styles } from 'react-joyride'
 import { useSettingsStore } from '@/hooks/use-settings'
 import { useResolvedTheme } from '@/hooks/use-chat-settings'
 
@@ -72,7 +72,7 @@ export function OnboardingTour() {
   // Don't render Joyride at all during SSR — prevents localStorage/DOM errors
   if (!mounted) return null
 
-  const handleJoyrideCallback = (data: CallBackProps) => {
+  const handleJoyrideEvent = (data: EventData) => {
     const { action, status } = data
     const shouldCompleteTour = shouldCompleteOnboardingTour(action, status)
 
@@ -89,14 +89,6 @@ export function OnboardingTour() {
   const primaryColor = ACCENT_COLORS[accentColor] || ACCENT_COLORS.orange
 
   const styles: Partial<Styles> = {
-    options: {
-      primaryColor,
-      backgroundColor: isDark ? '#1f2937' : '#ffffff',
-      textColor: isDark ? '#f3f4f6' : '#1f2937',
-      overlayColor: isDark ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.5)',
-      arrowColor: isDark ? '#1f2937' : '#ffffff',
-      zIndex: 10000,
-    },
     tooltip: {
       borderRadius: 12,
       fontSize: 14,
@@ -118,7 +110,7 @@ export function OnboardingTour() {
       lineHeight: 1.6,
       color: isDark ? '#e5e7eb' : '#374151',
     },
-    buttonNext: {
+    buttonPrimary: {
       backgroundColor: primaryColor,
       color: '#ffffff',
       borderRadius: 8,
@@ -145,9 +137,22 @@ export function OnboardingTour() {
       opacity: 0.6,
       transition: 'all 0.2s ease',
     },
-    spotlight: {
-      borderRadius: 8,
+    floater: {
+      filter: 'drop-shadow(0 10px 15px rgba(0, 0, 0, 0.1))',
     },
+  }
+
+  const options: Partial<Options> = {
+    arrowColor: isDark ? '#1f2937' : '#ffffff',
+    backgroundColor: isDark ? '#1f2937' : '#ffffff',
+    buttons: ['back', 'close', 'primary', 'skip'],
+    overlayColor: isDark ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.5)',
+    primaryColor,
+    showProgress: true,
+    spotlightPadding: 4,
+    spotlightRadius: 8,
+    textColor: isDark ? '#f3f4f6' : '#1f2937',
+    zIndex: 10000,
   }
 
   return (
@@ -155,9 +160,8 @@ export function OnboardingTour() {
       steps={tourSteps}
       run={run}
       continuous
-      showProgress
-      showSkipButton
-      callback={handleJoyrideCallback}
+      onEvent={handleJoyrideEvent}
+      options={options}
       styles={styles}
       locale={{
         back: 'Back',
@@ -166,15 +170,6 @@ export function OnboardingTour() {
         next: 'Next',
         skip: 'Skip tour',
       }}
-      floaterProps={{
-        disableAnimation: false,
-        styles: {
-          floater: {
-            filter: 'drop-shadow(0 10px 15px rgba(0, 0, 0, 0.1))',
-          },
-        },
-      }}
-      spotlightPadding={4}
     />
   )
 }

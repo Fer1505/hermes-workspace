@@ -18,7 +18,6 @@ import {
 } from '../../server/run-store'
 import { getChatMode } from '../../server/gateway-capabilities'
 import { appendLocalMessage, ensureLocalSession, getLocalMessages, touchLocalSession } from '../../server/local-session-store'
-import { getDiscoveredModels, getLocalProviderDef } from '../../server/local-provider-discovery'
 import { openaiChat } from '../../server/openai-compat-api'
 import { streamResponses } from '../../server/responses-api'
 import { selectPortableConversationHistory } from '../../server/portable-history'
@@ -36,6 +35,7 @@ import {
   collectSyntheticLiveToolEvents,
   createSyntheticLiveToolTracker,
 } from './-send-stream-live-tools'
+import { resolveLocalProviderBaseUrl } from './-send-stream-local-provider'
 import type {OpenAICompatContentPart, OpenAICompatMessage} from '../../server/openai-compat-api';
 // Claude agent runs can take 5+ minutes with complex tool chains
 const SEND_STREAM_RUN_TIMEOUT_MS = 600_000
@@ -353,16 +353,13 @@ export const Route = createFileRoute('/api/send-stream')({
         let chatMode = getChatMode()
         let localBaseUrl: string | undefined
         const requestModel = typeof body.model === 'string' ? body.model : ''
-        const bareModel = requestModel.includes('/') ? requestModel.split('/').slice(1).join('/') : requestModel
+        const bareModel = requestModel.includes('/')
+          ? requestModel.split('/').slice(1).join('/')
+          : requestModel
         if (requestModel) {
-          const discoveredModels = getDiscoveredModels()
-          const localMatch = discoveredModels.find((m) => m.id === requestModel || m.id === bareModel)
-          if (localMatch) {
-            const providerDef = getLocalProviderDef(localMatch.provider)
-            if (providerDef) {
-              chatMode = 'portable'
-              localBaseUrl = providerDef.baseUrl
-            }
+          localBaseUrl = await resolveLocalProviderBaseUrl(requestModel)
+          if (localBaseUrl) {
+            chatMode = 'portable'
           }
         }
         if (chatMode === 'portable' && sessionKey === 'new') {

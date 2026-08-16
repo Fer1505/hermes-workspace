@@ -45,6 +45,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify installed peer contracts
+        run: pnpm verify:peers
+
+      - name: Verify test network boundary
+        run: pnpm verify:test-network-boundary
+
       - name: Verify immutable GitHub Action pins
         run: |
           node --test scripts/verify-github-actions-pins.node-tests.mjs

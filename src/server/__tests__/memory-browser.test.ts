@@ -27,6 +27,7 @@ vi.mock('node:os', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  homedir.mockReturnValue('/home/testuser')
   delete process.env.HERMES_HOME
   delete process.env.CLAUDE_HOME
 })
