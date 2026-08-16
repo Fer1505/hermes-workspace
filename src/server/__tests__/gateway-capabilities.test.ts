@@ -34,6 +34,7 @@ vi.mock('node:os', () => ({
 beforeEach(() => {
   vi.clearAllMocks()
   vi.unstubAllGlobals()
+  readFileSync.mockReturnValue('')
   fetchMock.mockReset()
   vi.stubGlobal('fetch', fetchMock)
   delete process.env.CLAUDE_HOME
@@ -44,6 +45,8 @@ beforeEach(() => {
   delete process.env.HERMES_DASHBOARD_URL
   delete process.env.HERMES_DASHBOARD_TOKEN
   delete process.env.CLAUDE_DASHBOARD_TOKEN
+  delete process.env.HERMES_API_TOKEN
+  delete process.env.CLAUDE_API_TOKEN
   delete process.env.HOST
 })
 
@@ -176,6 +179,254 @@ describe('gateway-capabilities', () => {
     const resolved = mod.getResolvedUrls()
     expect(resolved.gateway).toBe('http://127.0.0.1:8642')
     expect(resolved.source).toBe('default')
+    expect(resolved.gatewaySource).toBe('default')
+    expect(resolved.dashboardSource).toBe('default')
+  })
+
+  describe('explicit URL precedence and discovery fencing', () => {
+    it('never probes default origins when persisted gateway and dashboard overrides exist', async () => {
+      readFileSync.mockReturnValue(
+        JSON.stringify({
+          claudeApiUrl: 'http://persisted-gateway.test',
+          claudeDashboardUrl: 'http://persisted-dashboard.test',
+        }),
+      )
+      process.env.HERMES_API_TOKEN = 'gateway-secret'
+      process.env.HERMES_DASHBOARD_URL = 'http://ignored-env-dashboard.test'
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === 'http://persisted-dashboard.test/api/status') {
+          return new Response(null, { status: 404 })
+        }
+        return new Response(null, { status: 404 })
+      })
+
+      const mod = await loadMod()
+      await mod.probeGateway({ force: true })
+
+      expect(mod.getResolvedUrls()).toMatchObject({
+        gateway: 'http://persisted-gateway.test',
+        dashboard: 'http://persisted-dashboard.test',
+        source: 'override',
+        gatewaySource: 'persisted',
+        dashboardSource: 'persisted',
+      })
+      const calls = fetchMock.mock.calls.map(([input, init]) => ({
+        url: String(input),
+        headers: new Headers(init?.headers),
+      }))
+      expect(
+        calls.some(
+          ({ url }) =>
+            url.startsWith('http://127.0.0.1:864') ||
+            url.startsWith('http://127.0.0.1:9119'),
+        ),
+      ).toBe(false)
+      const gatewayCalls = calls.filter(({ url }) =>
+        url.startsWith('http://persisted-gateway.test'),
+      )
+      const dashboardCalls = calls.filter(({ url }) =>
+        url.startsWith('http://persisted-dashboard.test'),
+      )
+      expect(gatewayCalls.length).toBeGreaterThan(0)
+      expect(dashboardCalls.length).toBeGreaterThan(0)
+      expect(
+        gatewayCalls.every(
+          ({ headers }) =>
+            headers.get('Authorization') === 'Bearer gateway-secret',
+        ),
+      ).toBe(true)
+      expect(
+        dashboardCalls.every(({ headers }) => !headers.has('Authorization')),
+      ).toBe(true)
+    })
+
+    it('does not let stale gateway discovery replace a runtime setter or receive its bearer token', async () => {
+      process.env.HERMES_API_TOKEN = 'gateway-secret'
+      let discoveryStarted!: () => void
+      let releaseDiscovery!: () => void
+      const started = new Promise<void>((resolve) => {
+        discoveryStarted = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        releaseDiscovery = resolve
+      })
+      fetchMock.mockImplementation(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input)
+          if (url === 'http://127.0.0.1:8642/health') {
+            discoveryStarted()
+            await gate
+            return new Response(null, { status: 200 })
+          }
+          if (url === 'http://127.0.0.1:9119/api/status') {
+            return new Response(null, { status: 404 })
+          }
+          if (url.startsWith('http://runtime-gateway.test')) {
+            expect(new Headers(init?.headers).get('Authorization')).toBe(
+              'Bearer gateway-secret',
+            )
+            return new Response(null, { status: 404 })
+          }
+          throw new Error(`unexpected request: ${url}`)
+        },
+      )
+
+      const mod = await loadMod()
+      const staleProbe = mod.probeGateway({ force: true })
+      await started
+      const discoveryCall = fetchMock.mock.calls.find(
+        ([input]) => String(input) === 'http://127.0.0.1:8642/health',
+      )
+      const discoverySignal = discoveryCall?.[1]?.signal
+      expect(
+        new Headers(discoveryCall?.[1]?.headers).has('Authorization'),
+      ).toBe(false)
+
+      mod.setGatewayUrl('http://runtime-gateway.test')
+      expect(discoverySignal?.aborted).toBe(true)
+      const currentProbe = mod.probeGateway({ force: true })
+      releaseDiscovery()
+      const [staleCaps, currentCaps] = await Promise.all([
+        staleProbe,
+        currentProbe,
+      ])
+
+      expect(mod.CLAUDE_API).toBe('http://runtime-gateway.test')
+      expect(mod.getResolvedUrls().gatewaySource).toBe('runtime')
+      expect(staleCaps).toBe(currentCaps)
+      const defaultGatewayCalls = fetchMock.mock.calls.filter(([input]) =>
+        String(input).startsWith('http://127.0.0.1:864'),
+      )
+      expect(defaultGatewayCalls).toHaveLength(1)
+      expect(String(defaultGatewayCalls[0]?.[0])).toBe(
+        'http://127.0.0.1:8642/health',
+      )
+      expect(
+        new Headers(defaultGatewayCalls[0]?.[1]?.headers).has('Authorization'),
+      ).toBe(false)
+    })
+
+    it('does not let stale dashboard discovery replace a runtime setter or attach to localhost', async () => {
+      process.env.HERMES_API_URL = 'http://intended-gateway.test'
+      process.env.HERMES_API_TOKEN = 'gateway-secret'
+      let discoveryStarted!: () => void
+      let releaseDiscovery!: () => void
+      const started = new Promise<void>((resolve) => {
+        discoveryStarted = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        releaseDiscovery = resolve
+      })
+      fetchMock.mockImplementation(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input)
+          if (url === 'http://127.0.0.1:9119/api/status') {
+            discoveryStarted()
+            await gate
+            return new Response(
+              JSON.stringify({ version: '0.19.0', auth_required: false }),
+              { headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (url === 'http://runtime-dashboard.test/api/status') {
+            return new Response(
+              JSON.stringify({ version: '0.19.0', auth_required: false }),
+              { headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (url.startsWith('http://runtime-dashboard.test')) {
+            expect(new Headers(init?.headers).has('Authorization')).toBe(false)
+            return new Response(null, { status: 404 })
+          }
+          if (url.startsWith('http://intended-gateway.test')) {
+            expect(new Headers(init?.headers).get('Authorization')).toBe(
+              'Bearer gateway-secret',
+            )
+            return new Response(null, { status: 404 })
+          }
+          throw new Error(`unexpected request: ${url}`)
+        },
+      )
+
+      const mod = await loadMod()
+      const staleProbe = mod.probeGateway({ force: true })
+      await started
+      const discoveryCall = fetchMock.mock.calls.find(
+        ([input]) => String(input) === 'http://127.0.0.1:9119/api/status',
+      )
+
+      mod.setDashboardUrl('http://runtime-dashboard.test')
+      expect(discoveryCall?.[1]?.signal?.aborted).toBe(true)
+      const currentProbe = mod.probeGateway({ force: true })
+      releaseDiscovery()
+      await Promise.all([staleProbe, currentProbe])
+
+      expect(mod.CLAUDE_DASHBOARD_URL).toBe('http://runtime-dashboard.test')
+      expect(mod.getResolvedUrls()).toMatchObject({
+        gatewaySource: 'env',
+        dashboardSource: 'runtime',
+      })
+      const localhostDashboardCalls = fetchMock.mock.calls.filter(([input]) =>
+        String(input).startsWith('http://127.0.0.1:9119'),
+      )
+      expect(localhostDashboardCalls).toHaveLength(1)
+      expect(String(localhostDashboardCalls[0]?.[0])).toBe(
+        'http://127.0.0.1:9119/api/status',
+      )
+      expect(
+        new Headers(localhostDashboardCalls[0]?.[1]?.headers).has(
+          'Authorization',
+        ),
+      ).toBe(false)
+    })
+
+    it('re-enables gateway and dashboard discovery after runtime overrides are cleared', async () => {
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === 'http://127.0.0.1:8642/health') {
+          return new Response(null, { status: 200 })
+        }
+        if (url === 'http://127.0.0.1:9119/api/status') {
+          return new Response(
+            JSON.stringify({ version: '0.19.0', auth_required: false }),
+            { headers: { 'content-type': 'application/json' } },
+          )
+        }
+        return new Response(null, { status: 404 })
+      })
+
+      const mod = await loadMod()
+      mod.setGatewayUrl('http://runtime-gateway.test')
+      mod.setDashboardUrl('http://runtime-dashboard.test')
+      mod.setGatewayUrl(null)
+      mod.setDashboardUrl(null)
+      expect(mod.getResolvedUrls()).toMatchObject({
+        gatewaySource: 'default',
+        dashboardSource: 'default',
+      })
+
+      await mod.probeGateway({ force: true })
+
+      expect(mod.getResolvedUrls()).toMatchObject({
+        gateway: 'http://127.0.0.1:8642',
+        dashboard: 'http://127.0.0.1:9119',
+        source: 'default',
+        gatewaySource: 'discovered',
+        dashboardSource: 'discovered',
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:8642/health',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:9119/api/status',
+        expect.objectContaining({
+          redirect: 'error',
+          signal: expect.any(AbortSignal),
+        }),
+      )
+    })
   })
 
   describe('dashboard authentication contract', () => {
@@ -460,7 +711,7 @@ describe('gateway-capabilities', () => {
           return new Response(
             JSON.stringify({ version: '0.19.0', auth_required: false }),
             {
-            headers: { 'content-type': 'application/json' },
+              headers: { 'content-type': 'application/json' },
             },
           )
         }
@@ -525,7 +776,7 @@ describe('gateway-capabilities', () => {
           return new Response(
             JSON.stringify({ version: '0.19.0', auth_required: false }),
             {
-            headers: { 'content-type': 'application/json' },
+              headers: { 'content-type': 'application/json' },
             },
           )
         }

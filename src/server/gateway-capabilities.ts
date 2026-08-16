@@ -61,18 +61,67 @@ function normalizeUrl(u: string): string {
 
 const _initialOverrides = readOverrides()
 
-export let CLAUDE_API = normalizeUrl(
-  _initialOverrides.claudeApiUrl ||
-    process.env.HERMES_API_URL ||
-    process.env.CLAUDE_API_URL ||
-    'http://127.0.0.1:8642',
+export type UrlSelectionSource =
+  | 'persisted'
+  | 'env'
+  | 'runtime'
+  | 'default'
+  | 'discovered'
+
+function configuredUrl(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? normalizeUrl(value) : null
+}
+
+function resolveGatewayWithoutRuntimeOverride(): {
+  url: string
+  source: 'env' | 'default'
+} {
+  const envUrl = configuredUrl(
+    process.env.HERMES_API_URL || process.env.CLAUDE_API_URL,
+  )
+  return envUrl
+    ? { url: envUrl, source: 'env' }
+    : { url: 'http://127.0.0.1:8642', source: 'default' }
+}
+
+function resolveDashboardWithoutRuntimeOverride(): {
+  url: string
+  source: 'env' | 'default'
+} {
+  const envUrl = configuredUrl(
+    process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL,
+  )
+  return envUrl
+    ? { url: envUrl, source: 'env' }
+    : { url: 'http://127.0.0.1:9119', source: 'default' }
+}
+
+const _persistedGatewayUrl = configuredUrl(_initialOverrides.claudeApiUrl)
+const _persistedDashboardUrl = configuredUrl(
+  _initialOverrides.claudeDashboardUrl,
 )
-export let CLAUDE_DASHBOARD_URL = normalizeUrl(
-  _initialOverrides.claudeDashboardUrl ||
-    process.env.HERMES_DASHBOARD_URL ||
-    process.env.CLAUDE_DASHBOARD_URL ||
-    'http://127.0.0.1:9119',
-)
+const _initialGateway = resolveGatewayWithoutRuntimeOverride()
+const _initialDashboard = resolveDashboardWithoutRuntimeOverride()
+
+export let CLAUDE_API = _persistedGatewayUrl ?? _initialGateway.url
+export let CLAUDE_DASHBOARD_URL =
+  _persistedDashboardUrl ?? _initialDashboard.url
+
+let gatewayUrlSource: UrlSelectionSource = _persistedGatewayUrl
+  ? 'persisted'
+  : _initialGateway.source
+let dashboardUrlSource: UrlSelectionSource = _persistedDashboardUrl
+  ? 'persisted'
+  : _initialDashboard.source
+
+function invalidateProbe(): void {
+  probeEpoch += 1
+  discoveryAbortController?.abort()
+  discoveryAbortController = null
+  probePromise = null
+  lastProbeAt = 0
+  capabilities = { ...capabilities, probed: false }
+}
 
 /**
  * Update the gateway URL at runtime, persist it, and reset the probe cache
@@ -86,20 +135,16 @@ export function setGatewayUrl(input: string | null | undefined): string {
   if (normalized) {
     overrides.claudeApiUrl = normalized
     CLAUDE_API = normalized
+    gatewayUrlSource = 'runtime'
   } else {
     delete overrides.claudeApiUrl
-    CLAUDE_API = normalizeUrl(
-      process.env.HERMES_API_URL ||
-        process.env.CLAUDE_API_URL ||
-        'http://127.0.0.1:8642',
-    )
+    const fallback = resolveGatewayWithoutRuntimeOverride()
+    CLAUDE_API = fallback.url
+    gatewayUrlSource = fallback.source
   }
   writeOverrides(overrides)
   // Force reprobe on the next capability check.
-  probeEpoch += 1
-  probePromise = null
-  lastProbeAt = 0
-  capabilities = { ...capabilities, probed: false }
+  invalidateProbe()
   return CLAUDE_API
 }
 
@@ -112,21 +157,17 @@ export function setDashboardUrl(input: string | null | undefined): string {
   if (normalized) {
     overrides.claudeDashboardUrl = normalized
     CLAUDE_DASHBOARD_URL = normalized
+    dashboardUrlSource = 'runtime'
   } else {
     delete overrides.claudeDashboardUrl
-    CLAUDE_DASHBOARD_URL = normalizeUrl(
-      process.env.HERMES_DASHBOARD_URL ||
-        process.env.CLAUDE_DASHBOARD_URL ||
-        'http://127.0.0.1:9119',
-    )
+    const fallback = resolveDashboardWithoutRuntimeOverride()
+    CLAUDE_DASHBOARD_URL = fallback.url
+    dashboardUrlSource = fallback.source
   }
   writeOverrides(overrides)
-  probeEpoch += 1
-  probePromise = null
-  lastProbeAt = 0
+  invalidateProbe()
   capabilities = {
     ...capabilities,
-    probed: false,
     dashboard: { available: false, url: CLAUDE_DASHBOARD_URL },
   }
   return CLAUDE_DASHBOARD_URL
@@ -137,14 +178,22 @@ export function getResolvedUrls(): {
   gateway: string
   dashboard: string
   source: 'override' | 'env' | 'default'
+  gatewaySource: UrlSelectionSource
+  dashboardSource: UrlSelectionSource
 } {
-  const overrides = readOverrides()
-  const source = overrides.claudeApiUrl
-    ? 'override'
-    : process.env.HERMES_API_URL || process.env.CLAUDE_API_URL
-      ? 'env'
-      : 'default'
-  return { gateway: CLAUDE_API, dashboard: CLAUDE_DASHBOARD_URL, source }
+  const source =
+    gatewayUrlSource === 'persisted' || gatewayUrlSource === 'runtime'
+      ? 'override'
+      : gatewayUrlSource === 'env'
+        ? 'env'
+        : 'default'
+  return {
+    gateway: CLAUDE_API,
+    dashboard: CLAUDE_DASHBOARD_URL,
+    source,
+    gatewaySource: gatewayUrlSource,
+    dashboardSource: dashboardUrlSource,
+  }
 }
 
 export const CLAUDE_UPGRADE_INSTRUCTIONS =
@@ -298,6 +347,7 @@ let capabilities: GatewayCapabilities = {
 
 let probePromise: Promise<GatewayCapabilities> | null = null
 let probeEpoch = 0
+let discoveryAbortController: AbortController | null = null
 let lastProbeAt = 0
 let lastLoggedSummary = ''
 
@@ -709,12 +759,13 @@ async function readBoundedText(
 
 async function fetchCurrentDashboardStatus(
   dashboardUrl: string,
+  signal: AbortSignal = AbortSignal.timeout(PROBE_TIMEOUT_MS),
 ): Promise<CurrentDashboardStatus | null> {
   try {
     const res = await fetch(`${dashboardUrl}/api/status`, {
       headers: { Accept: 'application/json' },
       redirect: 'error',
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      signal,
     })
     if (!res.ok) return null
     const contentType = (res.headers.get('content-type') ?? '')
@@ -901,8 +952,25 @@ function logCapabilities(next: GatewayCapabilities): void {
   }
 }
 
-async function autoDetectGatewayUrl(): Promise<void> {
-  if (process.env.HERMES_API_URL || process.env.CLAUDE_API_URL) return
+function discoverySignal(controller: AbortController): AbortSignal {
+  return AbortSignal.any([
+    controller.signal,
+    AbortSignal.timeout(PROBE_TIMEOUT_MS),
+  ])
+}
+
+function canAutoDetect(source: UrlSelectionSource): boolean {
+  return source === 'default' || source === 'discovered'
+}
+
+async function autoDetectGatewayUrl(
+  source: UrlSelectionSource,
+  controller: AbortController,
+): Promise<string | null> {
+  // Discovery is only allowed from the built-in default or a prior discovery.
+  // Persisted, env, and runtime selections are operator intent and must never
+  // be replaced by a co-located service on a well-known port.
+  if (!canAutoDetect(source)) return null
 
   const candidates = [
     'http://127.0.0.1:8642',
@@ -913,14 +981,13 @@ async function autoDetectGatewayUrl(): Promise<void> {
   for (const candidate of candidates) {
     try {
       const res = await fetch(`${candidate}/health`, {
-        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        signal: discoverySignal(controller),
       })
       if (res.ok) {
-        CLAUDE_API = candidate
-        console.log(`[gateway] Connected to Hermes gateway at ${CLAUDE_API}`)
-        return
+        return candidate
       }
     } catch {
+      if (controller.signal.aborted) return null
       // continue
     }
   }
@@ -931,26 +998,25 @@ async function autoDetectGatewayUrl(): Promise<void> {
       'set HERMES_API_URL=http://<reachable-host>:8642 in .env and restart. ' +
       'Also set API_SERVER_HOST=0.0.0.0 on the gateway so remote peers can connect.',
   )
+  return null
 }
 
-async function autoDetectDashboardUrl(): Promise<void> {
-  // Mirror autoDetectGatewayUrl: skip discovery when the dashboard URL was set
-  // explicitly. HERMES_DASHBOARD_URL is the documented primary var (see the
-  // resolution order at the top of this file); CLAUDE_DASHBOARD_URL is the
-  // legacy alias. Probing only the hard-coded :9119 candidate when
-  // HERMES_DASHBOARD_URL points elsewhere lets a co-located dashboard on the
-  // default port silently override the operator's explicit choice — e.g. in a
-  // multi-user setup it attaches to another user's dashboard and leaks their
-  // session list. Honor both vars so an explicit setting always wins.
-  if (process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL) return
+async function autoDetectDashboardUrl(
+  source: UrlSelectionSource,
+  controller: AbortController,
+): Promise<string | null> {
+  if (!canAutoDetect(source)) return null
 
   const candidates = ['http://127.0.0.1:9119']
   for (const candidate of candidates) {
-    if (await fetchCurrentDashboardStatus(candidate)) {
-      CLAUDE_DASHBOARD_URL = candidate
-      return
+    if (
+      await fetchCurrentDashboardStatus(candidate, discoverySignal(controller))
+    ) {
+      return candidate
     }
+    if (controller.signal.aborted) return null
   }
+  return null
 }
 
 export async function probeGateway(options?: {
@@ -965,10 +1031,45 @@ export async function probeGateway(options?: {
   }
 
   const invocationEpoch = probeEpoch
+  const invocationGatewayUrl = CLAUDE_API
+  const invocationDashboardUrl = CLAUDE_DASHBOARD_URL
+  const invocationGatewaySource = gatewayUrlSource
+  const invocationDashboardSource = dashboardUrlSource
+  const currentDiscoveryController = new AbortController()
+  discoveryAbortController = currentDiscoveryController
   const currentPromise = (async () => {
-    await Promise.all([autoDetectGatewayUrl(), autoDetectDashboardUrl()])
-    if (invocationEpoch !== probeEpoch) {
+    const [detectedGatewayUrl, detectedDashboardUrl] = await Promise.all([
+      autoDetectGatewayUrl(invocationGatewaySource, currentDiscoveryController),
+      autoDetectDashboardUrl(
+        invocationDashboardSource,
+        currentDiscoveryController,
+      ),
+    ])
+    if (discoveryAbortController === currentDiscoveryController) {
+      discoveryAbortController = null
+    }
+    if (
+      invocationEpoch !== probeEpoch ||
+      invocationGatewayUrl !== CLAUDE_API ||
+      invocationDashboardUrl !== CLAUDE_DASHBOARD_URL ||
+      invocationGatewaySource !== gatewayUrlSource ||
+      invocationDashboardSource !== dashboardUrlSource
+    ) {
       return probeGateway({ force: true })
+    }
+
+    // Discovery functions return observations only. Commit them here, after
+    // fencing the complete URL/source snapshot captured before any network
+    // request. A runtime setter can therefore invalidate and abort discovery
+    // without stale work ever mutating the selected origins.
+    if (detectedGatewayUrl && canAutoDetect(gatewayUrlSource)) {
+      CLAUDE_API = detectedGatewayUrl
+      gatewayUrlSource = 'discovered'
+      console.log(`[gateway] Connected to Hermes gateway at ${CLAUDE_API}`)
+    }
+    if (detectedDashboardUrl && canAutoDetect(dashboardUrlSource)) {
+      CLAUDE_DASHBOARD_URL = detectedDashboardUrl
+      dashboardUrlSource = 'discovered'
     }
     const runEpoch = probeEpoch
     const runGatewayUrl = CLAUDE_API
